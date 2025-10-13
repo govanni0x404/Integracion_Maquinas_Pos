@@ -131,6 +131,18 @@ def do_sale_with_timeout(tx_id, port, amount, timeout, result_url):
         return {"status": "error", "message": "Pos Timeout"}
     return result
 
+# Libera la caja en el servidor tras completar una transacción
+def liberar_caja(client_id, box_id):
+    url = f"http://192.168.100.131:5000/debug/force_free?client_id={client_id}&box_id={box_id}"
+    try:
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            logger.info(f"Caja liberada correctamente: {box_id}")
+        else:
+            logger.warning(f"No se pudo liberar la caja {box_id}: {r.status_code} {r.text}")
+    except Exception as e:
+        logger.error(f"Error liberando caja {box_id}: {e}")
+
 # Bucle principal que continuamente consulta el servidor por nuevas tareas (polling)
 def poll_loop():
     register()
@@ -169,6 +181,8 @@ def poll_loop():
                 result = {"status": "error", "message": "No se detectó POS conectado"}
             else:
                 result = do_sale_with_timeout(tx_id, puerto, amount, POLL_TIMEOUT, result_url)
+
+            liberar_caja(CLIENT_ID, BOX_ID)
 
             payload = {"tx_id": tx_id, "result": result}
             try:
