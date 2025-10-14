@@ -192,7 +192,7 @@ def poll_loop():
                 logger.error("[Agent] Error enviando resultado final: {}".format(e))
 
         except requests.exceptions.ReadTimeout:
-            logger.debug("Timeout en poll (normal). Reintentando...")
+            logger.debug("Timeout en el poll (normal). Reintentando...")
             continue
         except Exception as e:
             logger.error("Error en poll_loop: {}\n{}".format(e, traceback.format_exc()))

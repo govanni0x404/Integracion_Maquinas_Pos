@@ -119,7 +119,7 @@ def cleanup_stale_tasks():
                     with BUSY_LOCK:
                         key = (task.get("client_id"), task.get("box_id"))
                         BUSY_BOXES.discard(key)
-                        logging.warning("[CLEANUP] Tarea huérfana eliminada y caja liberada: {} tx={}".format(key, tx_id))
+                        logging.warning("[CLEANUP] Tarea huérfana eliminada y la caja liberada: {} tx={}".format(key, tx_id))
                     clean_queue_of_task(key[0], key[1], tx_id)
 
         # Verifica agentes inactivos y cajas que han estado ocupadas demasiado tiempo
