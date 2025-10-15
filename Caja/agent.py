@@ -76,7 +76,7 @@ def detect_port(preferred=None):
                     pos.close_port()
             except Exception:
                 pass
-    logger.warning("No se detectó POS en ningún puerto.")
+    logger.warning("No se detectó ninguna maquina POS en ningún puerto.")
     return None
 
 # Realiza una transacción de venta en el dispositivo POS
