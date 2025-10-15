@@ -8,6 +8,7 @@ import queue
 from datetime import datetime
 from flask import Flask, json, request, jsonify
 from logging.handlers import RotatingFileHandler
+from flask_cors import CORS
 import requests
 from dotenv import load_dotenv
 
@@ -25,6 +26,20 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+
+# CONFIGURACIÓN DE CORS
+#CORS(app)
+
+# Configuración granular
+CORS(app, resources={
+     r"/*": {
+         "origins": ["https://localhost:3000", "http://localhost:3000"],
+         "methods": ["GET", "POST", "OPTIONS"],
+         "allow_headers": ["Content-Type", "Authorization"],
+         "expose_headers": ["X-Transaction-ID"],
+         "max_age": 3600
+     }
+ })
 
 # Carga las variables de entorno desde un archivo .env
 load_dotenv()
