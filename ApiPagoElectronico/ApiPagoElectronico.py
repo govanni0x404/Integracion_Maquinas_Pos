@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Aplicación Unificada - POS Payment Gateway
-Servidor y Cliente (Agent) en una sola aplicación
-"""
 import gc
 import os
 import sys
@@ -20,6 +14,11 @@ from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
+import sys
+import logging
+
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 # Intentar importar dependencias opcionales
 try:
