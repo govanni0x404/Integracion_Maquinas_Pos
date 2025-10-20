@@ -1,84 +1,91 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-POS Payment Gateway - TODO EN UNO
-Server + Agent completos en un solo archivo
+ApiPagoElectronico_unificado.py
+Servidor + Agente + Tray icon + Logging + Single instance
+Soporta: transbank (POS físico) y mercadopago (API)
+Lee configuración desde .env
 """
-import gc
+
 import os
 import sys
 import time
 import uuid
 import json
-import logging
-import requests
-import traceback
-import threading
+import gc
 import queue
 import socket
-from datetime import datetime
+import logging
+import traceback
+import threading
+import requests
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+from datetime import datetime
 from dotenv import load_dotenv
 
-# Dependencias opcionales
+# Opcionales
 try:
     from flask import Flask, request, jsonify
     from flask_cors import CORS
     FLASK_AVAILABLE = True
-except ImportError:
+except Exception:
     FLASK_AVAILABLE = False
-    print("⚠️ Flask no disponible")
-    sys.exit(1)
 
 try:
     import serial.tools.list_ports
     from transbank import POSIntegrado
     TRANSBANK_AVAILABLE = True
-except ImportError:
+except Exception:
     TRANSBANK_AVAILABLE = False
-    print("⚠️ Transbank SDK no disponible - POS físico deshabilitado")
 
 try:
     import pystray
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     SYSTRAY_AVAILABLE = True
-except ImportError:
+except Exception:
     SYSTRAY_AVAILABLE = False
-    print("⚠️ pystray no disponible - Sin icono de bandeja")
 
+# Safety for sys.stdout/stderr when --noconsole packaging
+if getattr(sys, "stdout", None):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if getattr(sys, "stderr", None):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# Load env
 load_dotenv()
 
-# ============================================
-# CONFIGURACIÓN
-# ============================================
-APP_NAME = "POS Gateway"
-LOG_FILE = "pos_gateway.log"
-LOCK_FILE = "pos_gateway.lock"
+# -----------------------
+# Configuration from .env
+# -----------------------
+APP_NAME = os.environ.get("APP_NAME", "POS Gateway")
+LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
+LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
 
-# Red
-HTTP_PORT = int(os.environ.get("HTTP_PORT", "5000"))
+HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5000")))
 
-# Identificación
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
 NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
-TERMINAL_ID = os.environ.get("TERMINAL_ID", "POS_{}".format(NOMBRE_CAJA))
+ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
 
-# POS físico
 USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "true").lower() == "true"
 PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM7,COM6,COM8")
 
-# Timeouts
 MAX_TRANSACTION_TIME = int(os.environ.get("MAX_TRANSACTION_TIME", "90"))
 TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120"))
 
-# Mercado Pago
 ALLOWED_MP = set([x.strip() for x in os.environ.get("ALLOWED_MP", "").split(",") if x.strip()])
-MP_API_URL = "https://api.mercadopago.com/v1/orders"
+MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders")
 
-# ============================================
-# LOGGING
-# ============================================
+# -----------------------
+# Logging
+# -----------------------
 handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
 logging.basicConfig(
     level=logging.INFO,
@@ -87,183 +94,140 @@ logging.basicConfig(
 )
 logger = logging.getLogger(APP_NAME)
 
-# ============================================
-# INSTANCIA ÚNICA
-# ============================================
+# -----------------------
+# Single instance lock
+# -----------------------
 def ensure_single_instance():
     lock_path = Path(LOCK_FILE)
     if lock_path.exists():
         try:
-            with open(lock_path, 'r') as f:
+            with open(lock_path, "r") as f:
                 pid = int(f.read().strip())
             try:
                 os.kill(pid, 0)
-                logger.error("❌ Ya hay una instancia corriendo (PID: {})".format(pid))
+                logger.error("Otra instancia detectada (PID=%s).", pid)
                 return False
             except OSError:
                 lock_path.unlink()
-        except:
-            lock_path.unlink()
-    
+        except Exception:
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
     try:
-        with open(lock_path, 'w') as f:
+        with open(lock_path, "w") as f:
             f.write(str(os.getpid()))
-        logger.info("✅ Instancia única verificada")
+        logger.info("Lock file creado: %s", lock_path)
         return True
     except Exception as e:
-        logger.error("Error creando lock: {}".format(e))
+        logger.error("No se pudo crear lock file: %s", e)
         return False
 
 def cleanup_lock():
     try:
         Path(LOCK_FILE).unlink(missing_ok=True)
-    except:
+    except Exception:
         pass
 
-# ============================================
-# FIREWALL
-# ============================================
+# -----------------------
+# Firewall helper (Windows)
+# -----------------------
 def open_firewall_port(port):
     try:
         import subprocess
-        rule_name = "POS_Gateway_Port_{}".format(port)
-        check_cmd = 'netsh advfirewall firewall show rule name="{}"'.format(rule_name)
+        rule_name = f"{APP_NAME}_Port_{port}"
+        check_cmd = f'netsh advfirewall firewall show rule name="{rule_name}"'
         result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
-        
         if "No rules match" in result.stdout:
-            add_cmd = 'netsh advfirewall firewall add rule name="{}" dir=in action=allow protocol=TCP localport={}'.format(rule_name, port)
-            result = subprocess.run(add_cmd, shell=True, capture_output=True, text=True)
-            if result.returncode == 0:
-                logger.info("✅ Puerto {} abierto en firewall".format(port))
+            add_cmd = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport={port}'
+            res = subprocess.run(add_cmd, shell=True, capture_output=True, text=True)
+            if res.returncode == 0:
+                logger.info("Puerto %s abierto en firewall", port)
             else:
-                logger.warning("⚠️ No se pudo abrir puerto (requiere admin)")
+                logger.warning("No se pudo abrir puerto en firewall (admin required): %s", res.stderr)
         else:
-            logger.info("✅ Puerto {} ya está abierto".format(port))
+            logger.info("Puerto %s ya presente en firewall", port)
     except Exception as e:
-        logger.warning("⚠️ Error en firewall: {}".format(e))
+        logger.warning("open_firewall_port error: %s", e)
 
-# ============================================
-# ICONO DE BANDEJA
-# ============================================
-class SystemTrayIcon:
-    def __init__(self):
-        self.icon = None
-        
-    def create_image(self):
-        width, height = 64, 64
-        image = Image.new('RGB', (width, height), '#2196F3')
-        dc = ImageDraw.Draw(image)
-        dc.rectangle([12, 12, 52, 52], fill='white')
-        dc.text((20, 22), "POS", fill='#2196F3')
-        return image
-    
-    def on_quit(self, icon, item):
-        logger.info("Cerrando...")
-        icon.stop()
-        cleanup_lock()
-        os._exit(0)
-    
-    def on_show_logs(self, icon, item):
-        try:
-            os.startfile(LOG_FILE)
-        except:
-            pass
-    
-    def on_show_config(self, icon, item):
-        try:
-            os.startfile(".env")
-        except:
-            pass
-    
-    def run(self):
-        if not SYSTRAY_AVAILABLE:
-            return
-        
-        try:
-            menu_items = [
-                pystray.MenuItem("POS Gateway", lambda: None, enabled=False),
-                pystray.MenuItem("Puerto: {}".format(HTTP_PORT), lambda: None, enabled=False),
-                pystray.MenuItem("Caja: {}/{}".format(ID_SUCURSAL, NOMBRE_CAJA), lambda: None, enabled=False),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Ver Logs", self.on_show_logs),
-                pystray.MenuItem("Ver Configuración", self.on_show_config),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Salir", self.on_quit)
-            ]
-            
-            self.icon = pystray.Icon(
-                APP_NAME,
-                self.create_image(),
-                "POS Gateway - {}/{}".format(ID_SUCURSAL, NOMBRE_CAJA),
-                menu=pystray.Menu(*menu_items)
-            )
-            
-            logger.info("✅ Icono de bandeja iniciado")
-            self.icon.run()
-        except Exception as e:
-            logger.error("Error en bandeja: {}".format(e))
-
-# ============================================
-# MÓDULO POS (TRANSBANK)
-# ============================================
+# -----------------------
+# POS Module: detection + sale + monitor
+# -----------------------
 class POSModule:
-    def __init__(self):
-        self.usar_pos_fisico = USAR_POS_FISICO
-        
+    def __init__(self, prefer_ports):
+        self.prefer_ports = [p.strip() for p in prefer_ports.split(",") if p.strip()]
+        self.current_port = None
+        self.lock = threading.Lock()
+        self._stop_monitor = threading.Event()
+        self.monitor_thread = None
+        self.last_ok = 0
+
+    def list_ports(self):
+        try:
+            ports = [p.device for p in serial.tools.list_ports.comports()]
+            return ports
+        except Exception:
+            return []
+
     def detect_port(self):
-        if not self.usar_pos_fisico or not TRANSBANK_AVAILABLE:
-            logger.warning("POS físico deshabilitado")
+        if not USAR_POS_FISICO or not TRANSBANK_AVAILABLE:
+            logger.debug("POS físico deshabilitado o SDK no presente")
             return None
-        
-        ports = [p.device for p in serial.tools.list_ports.comports()]
-        logger.info("Puertos detectados: {} | Preferidos: {}".format(ports, PUERTOS_COM))
-        if not ports:
-            logger.warning("No hay puertos COM disponibles")
-            return None
-        
-        pref_list = [p.strip() for p in PUERTOS_COM.split(",") if p.strip()]
-        ordered = [p for p in pref_list if p in ports] + [p for p in ports if p not in pref_list]
-        
+
+        ports = self.list_ports()
+        logger.info("Puertos detectados: %s | Preferidos: %s", ports, ",".join(self.prefer_ports))
+        ordered = [p for p in self.prefer_ports if p in ports] + [p for p in ports if p not in self.prefer_ports]
         for p in ordered:
             pos = None
             try:
                 pos = POSIntegrado()
                 if pos.open_port(p) and pos.poll():
-                    logger.info("✅ POS detectado en {}".format(p))
+                    try:
+                        pos.close_port()
+                    except:
+                        pass
+                    logger.info("POS detectado en %s", p)
+                    with self.lock:
+                        self.current_port = p
+                    self.last_ok = time.time()
                     return p
             except Exception as e:
-                logger.debug("Puerto {} no usable: {}".format(p, e))
+                logger.debug("Puerto %s no usable: %s", p, e)
             finally:
                 try:
                     if pos:
                         pos.close_port()
                 except:
                     pass
-        
-        logger.warning("No se detectó POS en ningún puerto")
+        logger.warning("No se detectó POS en los puertos listados")
+        with self.lock:
+            self.current_port = None
         return None
-    
-    def do_sale(self, port, amount):
-        if not self.usar_pos_fisico:
-            return {"status": "error", "message": "POS físico deshabilitado"}
-        
+
+    def get_current_port(self):
+        with self.lock:
+            return self.current_port
+
+    def open_port_and_sale(self, port, amount):
+        # Ejecuta venta en POSIntegrado
+        if not TRANSBANK_AVAILABLE:
+            return {"status": "error", "message": "Transbank SDK no disponible"}
         pos = None
         try:
             pos = POSIntegrado()
             if not pos.open_port(port):
-                return {"status": "error", "message": "No se pudo abrir {}".format(port)}
-            
+                return {"status": "error", "message": f"No se pudo abrir {port}"}
             ticket = time.strftime("%H%M%S")
-            logger.info("🔷 Venta Transbank: Puerto={} Monto={} Ticket={}".format(port, amount, ticket))
+            logger.info("Venta POS -> puerto=%s monto=%s ticket=%s", port, amount, ticket)
             res = pos.sale(amount, ticket)
-            logger.info("Respuesta POS: {}".format(res))
-            
+            logger.info("Respuesta POS: %s", res)
             if res.get("response_code") in ("0", "00"):
+                self.last_ok = time.time()
                 return {"status": "success", "response": res}
             else:
                 return {"status": "failed", "response": res}
         except Exception as e:
-            logger.error("Error en venta: {}\n{}".format(e, traceback.format_exc()))
+            logger.error("Error do_sale: %s\n%s", e, traceback.format_exc())
             return {"status": "error", "message": str(e)}
         finally:
             try:
@@ -272,50 +236,144 @@ class POSModule:
             except:
                 pass
             gc.collect()
-    
-    def do_sale_with_timeout(self, port, amount, timeout):
+
+    def do_sale_with_timeout(self, amount, timeout=MAX_TRANSACTION_TIME):
+        port = self.get_current_port() or self.detect_port()
+        if not port:
+            return {"status": "error", "message": "No se detectó POS conectado"}
         result = {}
-        
         def worker():
             nonlocal result
-            try:
-                result = self.do_sale(port, amount)
-            except Exception as e:
-                result = {"status": "error", "message": str(e)}
-        
+            result = self.open_port_and_sale(port, amount)
+
         t = threading.Thread(target=worker, daemon=True)
         t.start()
         t.join(timeout=timeout)
-        
         if t.is_alive():
-            logger.error("⏱️ Timeout en venta ({} segundos)".format(timeout))
+            logger.error("Timeout en venta POS (thread sigue vivo).")
             return {"status": "error", "message": "Timeout en venta POS"}
-        
         return result
 
-# ============================================
-# SERVIDOR COMPLETO
-# ============================================
-class POSServer:
+    def start_monitor(self, interval=5):
+        if not USAR_POS_FISICO or not TRANSBANK_AVAILABLE:
+            logger.info("Monitor POS no iniciado (no use POS físico o SDK falta)")
+            return
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            return
+        self._stop_monitor.clear()
+        def monitor():
+            while not self._stop_monitor.is_set():
+                try:
+                    if not self.get_current_port():
+                        self.detect_port()
+                    else:
+                        # check quick poll
+                        p = self.get_current_port()
+                        try:
+                            pos = POSIntegrado()
+                            ok = pos.open_port(p) and pos.poll()
+                            pos.close_port()
+                            if not ok:
+                                logger.warning("POS en %s dejó de responder, limpiando puerto.", p)
+                                with self.lock:
+                                    self.current_port = None
+                        except Exception:
+                            with self.lock:
+                                self.current_port = None
+                    time.sleep(interval)
+                except Exception as e:
+                    logger.debug("Monitor POS error: %s", e)
+                    time.sleep(interval)
+        self.monitor_thread = threading.Thread(target=monitor, daemon=True)
+        self.monitor_thread.start()
+        logger.info("Monitor POS iniciado")
+
+    def stop_monitor(self):
+        self._stop_monitor.set()
+        try:
+            if self.monitor_thread:
+                self.monitor_thread.join(timeout=1)
+        except:
+            pass
+        logger.info("Monitor POS detenido")
+
+    def restart(self):
+        logger.info("Reiniciando POS module (clear port + redetect)...")
+        with self.lock:
+            self.current_port = None
+        return self.detect_port()
+
+# -----------------------
+# MercadoPago helper
+# -----------------------
+def process_mercadopago(terminal_id, access_token, amount):
+    logger.info("Procesando MercadoPago terminal=%s monto=%s", terminal_id, amount)
+    idempotency_key = str(uuid.uuid4())
+    payload = {
+        "type": "point",
+        "external_reference": f"ext_ref_{uuid.uuid4().hex[:8]}",
+        "expiration_time": "PT16M",
+        "transactions": {"payments": [{"amount": str(amount)}]},
+        "config": {"point": {"terminal_id": terminal_id, "print_on_terminal": "no_ticket"}},
+        "description": "Venta POS"
+    }
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": idempotency_key
+    }
+    try:
+        resp = requests.post(MP_API_URL, json=payload, headers=headers, timeout=15)
+        data_resp = resp.json()
+        if resp.status_code != 201:
+            logger.warning("Error creando orden MP: %s %s", resp.status_code, data_resp)
+            return {"status": "failed", "http_status": resp.status_code, "response": data_resp}
+        order_id = data_resp["id"]
+        logger.info("Orden MP creada: %s; esperando resultado...", order_id)
+        start = time.time()
+        while time.time() - start < TIMEOUT_SERVER:
+            check = requests.get(f"{MP_API_URL}/{order_id}", headers=headers, timeout=10)
+            order_info = check.json()
+            status = order_info.get("status")
+            if status in ("created", "in_process", "at_terminal"):
+                time.sleep(3)
+                continue
+            logger.info("Orden %s finalizada con estado: %s", order_id, status)
+            return {"status": status, "order_id": order_id, "response": order_info}
+        logger.warning("Timeout esperando respuesta MP orden %s", order_id)
+        return {"status": "timeout", "order_id": order_id}
+    except Exception as e:
+        logger.error("Error MercadoPago: %s\n%s", e, traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+# -----------------------
+# Server (Flask) + local queue processing
+# -----------------------
+class APIServer:
     def __init__(self, pos_module):
-        self.pos_module = pos_module
+        if not FLASK_AVAILABLE:
+            logger.critical("Flask no instalado - no se puede iniciar servidor")
+            raise RuntimeError("Flask requerido")
+        self.pos = pos_module
         self.app = Flask(__name__)
         CORS(self.app)
-        
-        # Estado del servidor
-        self.queues = {}
+        # shared state
+        self.queues = {}            # {id_sucursal: {nombre_caja: Queue()}}
         self.queues_lock = threading.Lock()
-        self.agents = {}
+        self.agents = {}            # registered agents
         self.agents_lock = threading.Lock()
         self.tasks = {}
         self.tasks_lock = threading.Lock()
         self.busy_boxes = set()
         self.busy_lock = threading.Lock()
-        
+        # local processing worker (consumes local queue)
+        self.local_worker_thread = None
+        self._stop_local_worker = threading.Event()
+
         self.setup_routes()
-        self.register_self()
-        self.start_cleanup_thread()
-    
+        self.register_local_agent()
+        self.start_local_worker()
+
     def ensure_queue(self, id_sucursal, nombre_caja):
         with self.queues_lock:
             if id_sucursal not in self.queues:
@@ -323,161 +381,74 @@ class POSServer:
             if nombre_caja not in self.queues[id_sucursal]:
                 self.queues[id_sucursal][nombre_caja] = queue.Queue()
             return self.queues[id_sucursal][nombre_caja]
-    
+
     def register_agent(self, id_sucursal, nombre_caja, info=None):
         with self.agents_lock:
-            if id_sucursal not in self.agents:
-                self.agents[id_sucursal] = {}
-            self.agents[id_sucursal][nombre_caja] = {
-                "last_seen": time.time(),
-                "info": info or {}
-            }
-        
+            self.agents.setdefault(id_sucursal, {})[nombre_caja] = {"last_seen": time.time(), "info": info or {}}
         self.ensure_queue(id_sucursal, nombre_caja)
-        
-        # Libera si estaba ocupada
         with self.busy_lock:
             key = (id_sucursal, nombre_caja)
             if key in self.busy_boxes:
-                # Verifica si hay tareas activas
+                # release if no active task
                 with self.tasks_lock:
-                    active = any(
-                        t.get("id_sucursal") == id_sucursal and t.get("nombre_caja") == nombre_caja
-                        for t in self.tasks.values()
-                    )
-                    if not active:
-                        self.busy_boxes.discard(key)
-                        logger.info("Caja {}/{} liberada por reconexión".format(id_sucursal, nombre_caja))
-    
-    def register_self(self):
-        """Registra esta máquina como agente local"""
-        self.register_agent(ID_SUCURSAL, NOMBRE_CAJA, {
-            "host": socket.gethostname(),
-            "terminal_id": TERMINAL_ID,
-            "usa_pos_fisico": USAR_POS_FISICO,
-            "local": True
-        })
-        logger.info("✅ Agente local registrado: {}/{}".format(ID_SUCURSAL, NOMBRE_CAJA))
-    
-    def internal_free_box(self, id_sucursal, nombre_caja, reason=""):
-        key = (id_sucursal, nombre_caja)
-        with self.busy_lock:
-            if key in self.busy_boxes:
-                self.busy_boxes.discard(key)
-                logger.info("Caja {}/{} liberada {}".format(id_sucursal, nombre_caja, reason))
-        
-        with self.queues_lock:
-            q = self.queues.get(id_sucursal, {}).get(nombre_caja)
-            if q:
-                while not q.empty():
-                    try:
-                        q.get_nowait()
-                    except:
-                        pass
-    
-    def cleanup_stale_tasks(self):
-        """Hilo de limpieza"""
-        while True:
-            now = time.time()
-            
-            with self.tasks_lock:
-                for tx_id, task in list(self.tasks.items()):
-                    ts = task.get("timestamp", now)
-                    if now - ts > 2 * TIMEOUT_SERVER:
-                        self.tasks.pop(tx_id, None)
-                        id_sucursal = task.get("id_sucursal")
-                        nombre_caja = task.get("nombre_caja")
-                        self.internal_free_box(id_sucursal, nombre_caja, "por timeout de limpieza")
-                        logger.warning("Tarea huérfana eliminada: {}".format(tx_id))
-            
-            with self.agents_lock, self.busy_lock:
-                for id_sucursal, boxes in list(self.agents.items()):
-                    for nombre_caja, info in list(boxes.items()):
-                        key = (id_sucursal, nombre_caja)
-                        last_seen = info.get("last_seen", 0)
-                        
-                        if now - last_seen > 90:
-                            logger.warning("Agente inactivo eliminado: {}/{}".format(id_sucursal, nombre_caja))
-                            boxes.pop(nombre_caja, None)
-                            self.busy_boxes.discard(key)
-            
-            time.sleep(3)
-    
-    def start_cleanup_thread(self):
-        t = threading.Thread(target=self.cleanup_stale_tasks, daemon=True)
-        t.start()
-    
-    def process_local_transbank(self, amount):
-        """Procesa una venta Transbank localmente"""
-        logger.info("🏠 Procesamiento LOCAL Transbank: monto={}".format(amount))
-        
-        puerto = self.pos_module.detect_port()
-        if not puerto:
-            return {"status": "error", "message": "No se detectó POS conectado"}
-        
-        return self.pos_module.do_sale_with_timeout(puerto, amount, MAX_TRANSACTION_TIME)
-    
-    def process_mercadopago(self, terminal_id, access_token, amount):
-        """Procesa pago con Mercado Pago"""
-        logger.info("💳 Pago Mercado Pago: terminal={} monto={}".format(terminal_id, amount))
-        
-        idempotency_key = str(uuid.uuid4())
-        payload = {
-            "type": "point",
-            "external_reference": "ext_ref_{}".format(uuid.uuid4().hex[:8]),
-            "expiration_time": "PT16M",
-            "transactions": {"payments": [{"amount": str(amount)}]},
-            "config": {
-                "point": {
-                    "terminal_id": terminal_id,
-                    "print_on_terminal": "no_ticket"
-                }
-            },
-            "description": "Venta POS"
-        }
-        
-        headers = {
-            "Authorization": "Bearer {}".format(access_token),
-            "Content-Type": "application/json",
-            "X-Idempotency-Key": idempotency_key
-        }
-        
-        try:
-            resp = requests.post(MP_API_URL, json=payload, headers=headers, timeout=15)
-            data_resp = resp.json()
-            
-            if resp.status_code != 201:
-                logger.warning("Error creando orden MP: {} {}".format(resp.status_code, data_resp))
-                return {"status": "failed", "http_status": resp.status_code, "response": data_resp}
-            
-            order_id = data_resp["id"]
-            logger.info("Orden MP creada: {}, esperando resultado...".format(order_id))
-            
-            # Polling del estado de la orden
-            start = time.time()
-            while time.time() - start < TIMEOUT_SERVER:
-                check = requests.get("{}/{}".format(MP_API_URL, order_id), headers=headers, timeout=10)
-                order_info = check.json()
-                status = order_info.get("status")
-                
-                if status in ["created", "in_process", "at_terminal"]:
-                    time.sleep(3)
+                    active = any(t.get("id_sucursal")==id_sucursal and t.get("nombre_caja")==nombre_caja for t in self.tasks.values())
+                if not active:
+                    self.busy_boxes.discard(key)
+                    logger.info("Caja %s/%s liberada por reconexión", id_sucursal, nombre_caja)
+
+    def register_local_agent(self):
+        # register this machine as agent
+        info = {"host": socket.gethostname(), "terminal_id": ID_TERMINAL, "usa_pos_fisico": USAR_POS_FISICO, "local": True}
+        self.register_agent(ID_SUCURSAL, NOMBRE_CAJA, info)
+        logger.info("Agente local registrado %s/%s", ID_SUCURSAL, NOMBRE_CAJA)
+
+    def start_local_worker(self):
+        self._stop_local_worker.clear()
+        def worker():
+            logger.info("Local worker iniciado (procesa la cola local)...")
+            q = self.ensure_queue(ID_SUCURSAL, NOMBRE_CAJA)
+            while not self._stop_local_worker.is_set():
+                try:
+                    task = q.get(timeout=1)
+                except queue.Empty:
                     continue
-                
-                logger.info("Orden {} finalizada con estado: {}".format(order_id, status))
-                return {
-                    "status": status,
-                    "order_id": order_id,
-                    "response": order_info
-                }
-            
-            logger.warning("Timeout esperando respuesta de Mercado Pago")
-            return {"status": "timeout", "order_id": order_id}
-            
-        except Exception as e:
-            logger.error("Error Mercado Pago: {}\n{}".format(e, traceback.format_exc()))
-            return {"status": "error", "message": str(e)}
-    
+                try:
+                    tx_id = task.get("tx_id")
+                    tipo = task.get("type", "transbank")
+                    logger.info("Local worker procesando tx=%s tipo=%s", tx_id, tipo)
+                    if tipo == "transbank":
+                        amount = task.get("amount")
+                        result = self.pos.do_sale_with_timeout(amount, timeout=MAX_TRANSACTION_TIME)
+                    elif tipo == "mercadopago":
+                        terminal_id = task.get("id_terminal") or ID_TERMINAL
+                        access_token = task.get("access_token")
+                        amount = task.get("amount")
+                        result = process_mercadopago(terminal_id, access_token, amount)
+                    else:
+                        result = {"status": "error", "message": "Tipo no soportado"}
+                    # save result to tasks and free box
+                    with self.tasks_lock:
+                        entry = self.tasks.get(tx_id)
+                        if entry:
+                            entry["result"] = result
+                            entry["event"].set()
+                    with self.busy_lock:
+                        self.busy_boxes.discard((task.get("id_sucursal"), task.get("nombre_caja")))
+                    logger.info("Local worker finalizó tx=%s res=%s", tx_id, result)
+                except Exception as e:
+                    logger.error("Error en local worker: %s\n%s", e, traceback.format_exc())
+        self.local_worker_thread = threading.Thread(target=worker, daemon=True)
+        self.local_worker_thread.start()
+
+    def stop_local_worker(self):
+        self._stop_local_worker.set()
+        try:
+            if self.local_worker_thread:
+                self.local_worker_thread.join(timeout=1)
+        except:
+            pass
+
+    # --- Routes
     def setup_routes(self):
         @self.app.route("/register_agent", methods=["POST"])
         def http_register_agent():
@@ -485,291 +456,287 @@ class POSServer:
             id_sucursal = data.get("id_sucursal")
             nombre_caja = data.get("nombre_caja")
             meta = data.get("meta", {})
-            
             if not id_sucursal or not nombre_caja:
                 return jsonify({"error": "id_sucursal y nombre_caja requeridos"}), 400
-            
-            self.register_agent(id_sucursal, nombre_caja, info=meta)
-            logger.info("Agente registrado: {}/{} meta={}".format(id_sucursal, nombre_caja, meta))
+            id_s = str(id_sucursal)
+            nc = str(nombre_caja)
+            self.register_agent(id_s, nc, meta)
+            logger.info("Agent registered: %s/%s meta=%s", id_s, nc, meta)
             return jsonify({"status": "ok"})
-        
+
         @self.app.route("/poll", methods=["GET"])
         def http_poll():
             id_sucursal = request.args.get("id_sucursal")
             nombre_caja = request.args.get("nombre_caja")
-            
             if not id_sucursal or not nombre_caja:
                 return jsonify({"error": "id_sucursal y nombre_caja requeridos"}), 400
-            
-            self.register_agent(id_sucursal, nombre_caja)
-            q = self.ensure_queue(id_sucursal, nombre_caja)
-            
+            self.register_agent(str(id_sucursal), str(nombre_caja))
+            q = self.ensure_queue(str(id_sucursal), str(nombre_caja))
             try:
                 task = q.get(timeout=2)
-                logger.info("Despachando tarea -> {}/{} tx={}".format(id_sucursal, nombre_caja, task.get("tx_id")))
+                logger.info("Despachando tarea -> %s/%s tx=%s", id_sucursal, nombre_caja, task.get("tx_id"))
                 return jsonify({"task": task})
             except queue.Empty:
                 return jsonify({"task": None, "heartbeat": True})
-        
+
         @self.app.route("/result", methods=["POST"])
         def http_result():
             data = request.get_json(force=True, silent=True) or {}
             tx_id = data.get("tx_id")
             result = data.get("result")
-            
             if not tx_id or result is None:
                 return jsonify({"error": "tx_id y result requeridos"}), 400
-            
             with self.tasks_lock:
                 task = self.tasks.get(tx_id)
                 if not task:
-                    logger.warning("Resultado para tx_id desconocido: {}".format(tx_id))
+                    logger.warning("Resultado para tx_id desconocido: %s", tx_id)
                     return jsonify({"status": "unknown_tx"}), 404
-                
                 if task.get("result") is not None:
-                    logger.warning("Resultado duplicado tx={}".format(tx_id))
+                    logger.warning("Resultado duplicado tx=%s", tx_id)
                     return jsonify({"status": "already_processed"}), 200
-                
                 task["result"] = result
                 task["event"].set()
-            
-            logger.info("Resultado guardado tx={}: {}".format(tx_id, result))
-            
+            logger.info("Resultado guardado tx=%s: %s", tx_id, result)
             try:
-                id_sucursal = task.get("id_sucursal")
-                nombre_caja = task.get("nombre_caja")
+                id_s = task.get("id_sucursal")
+                nc = task.get("nombre_caja")
                 with self.busy_lock:
-                    self.busy_boxes.discard((id_sucursal, nombre_caja))
-                    logger.info("Caja liberada: {}/{}".format(id_sucursal, nombre_caja))
+                    self.busy_boxes.discard((id_s, nc))
             except:
                 pass
-            
             return jsonify({"status": "ok"})
-        
+
         @self.app.route("/pago", methods=["POST"])
         def http_pago():
             data = request.get_json(force=True, silent=True) or {}
-            # Normalizar a strings para evitar mismatches int/str
             id_sucursal = data.get("id_sucursal")
             nombre_caja = data.get("nombre_caja")
             pos_type = data.get("type")
-
-            logger.info("[HTTP /pago] Petición recibida: {}".format(json.dumps(data, ensure_ascii=False)))
-
-            # Cast seguro a str si viene algo no nulo (mantener None si no viene)
+            logger.info("[HTTP /pago] Petición recibida: %s", json.dumps(data, ensure_ascii=False))
             if id_sucursal is not None:
                 id_sucursal = str(id_sucursal)
             if nombre_caja is not None:
                 nombre_caja = str(nombre_caja)
-
             if not id_sucursal or not nombre_caja or not pos_type:
-                logger.warning("[/pago] Campos requeridos faltantes")
                 return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
 
-            # Ver estado POS físico
-            if pos_type == "transbank" and (not USAR_POS_FISICO or not TRANSBANK_AVAILABLE):
-                logger.warning("[/pago] Transbank solicitado pero POS físico deshabilitado o SDK no disponible. USAR_POS_FISICO=%s TRANSBANK_AVAILABLE=%s",
-                               USAR_POS_FISICO, TRANSBANK_AVAILABLE)
-                return jsonify({"status": "error", "message": "POS físico no disponible en esta máquina"}), 503
-
-            # Verifica si es esta máquina (procesamiento local)
+            # check if this machine is target (local)
             is_local = (id_sucursal == str(ID_SUCURSAL) and nombre_caja == str(NOMBRE_CAJA))
 
-            
-            # ==========================================
-            # TRANSBANK
-            # ==========================================
+            # Transbank flow
             if pos_type == "transbank":
-                terminal_id = data.get("terminal_id", TERMINAL_ID)
+                id_terminal = data.get("id_terminal", ID_TERMINAL)   # changed from pos_id -> id_terminal
                 amount = data.get("amount")
-                
                 if amount is None:
                     return jsonify({"error": "amount requerido"}), 400
-                
+
                 key = (id_sucursal, nombre_caja)
-                
-                # Verifica si está ocupada
                 with self.busy_lock:
                     if key in self.busy_boxes:
-                        logger.warning("Caja ocupada: {}/{}".format(id_sucursal, nombre_caja))
+                        logger.warning("Caja ocupada: %s/%s", id_sucursal, nombre_caja)
                         return jsonify({"status": "busy", "message": "Caja ocupada"}), 429
                     self.busy_boxes.add(key)
-                
+
                 tx_id = str(uuid.uuid4())
-                
-                try:
-                    if is_local:
-                        # PROCESAMIENTO LOCAL
-                        result = self.process_local_transbank(amount)
-                        with self.busy_lock:
-                            self.busy_boxes.discard(key)
-                        return jsonify({"transaction_id": tx_id, "result": result})
-                    
-                    else:
-                        # PROCESAMIENTO REMOTO
-                        logger.info("🌐 Procesamiento REMOTO tx={} -> {}/{}".format(tx_id, id_sucursal, nombre_caja))
-                        
-                        with self.agents_lock:
-                            agent_info = self.agents.get(id_sucursal, {}).get(nombre_caja)
-                        
-                        if not agent_info:
-                            with self.busy_lock:
-                                self.busy_boxes.discard(key)
-                            return jsonify({"status": "no_agent", "message": "Caja sin agente"}), 504
-                        
+
+                # If is local, enqueue to local queue (worker will process)
+                if is_local:
+                    with self.tasks_lock:
                         event = threading.Event()
+                        self.tasks[tx_id] = {"event": event, "result": None, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "timestamp": time.time()}
+                    task_payload = {"tx_id": tx_id, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "type": "transbank", "id_terminal": id_terminal, "amount": amount}
+                    q = self.ensure_queue(id_sucursal, nombre_caja)
+                    q.put(task_payload)
+                    logger.info("Tarea local encolada tx=%s -> %s/%s", tx_id, id_sucursal, nombre_caja)
+                    finished = self.tasks[tx_id]["event"].wait(timeout=TIMEOUT_SERVER)
+                    if not finished:
                         with self.tasks_lock:
-                            self.tasks[tx_id] = {
-                                "event": event,
-                                "result": None,
-                                "id_sucursal": id_sucursal,
-                                "nombre_caja": nombre_caja,
-                                "timestamp": time.time(),
-                            }
-                        
-                        task_payload = {
-                            "tx_id": tx_id,
-                            "id_sucursal": id_sucursal,
-                            "nombre_caja": nombre_caja,
-                            "terminal_id": terminal_id,
-                            "amount": amount,
-                            "timestamp": datetime.utcnow().isoformat()
-                        }
-                        
-                        q = self.ensure_queue(id_sucursal, nombre_caja)
-                        q.put(task_payload)
-                        
-                        finished = event.wait(timeout=TIMEOUT_SERVER)
-                        
-                        if not finished:
-                            logger.warning("TIMEOUT tx={}, liberando {}/{}".format(tx_id, id_sucursal, nombre_caja))
-                            with self.tasks_lock:
-                                self.tasks.pop(tx_id, None)
-                            self.internal_free_box(id_sucursal, nombre_caja, "por timeout")
-                            return jsonify({
-                                "status": "timeout",
-                                "transaction_id": tx_id,
-                                "message": "Timeout ({} segundos)".format(TIMEOUT_SERVER)
-                            }), 504
-                        
-                        with self.tasks_lock:
-                            res = self.tasks.pop(tx_id)["result"]
-                        with self.busy_lock:
-                            self.busy_boxes.discard(key)
-                        
-                        logger.info("Transacción completada tx={}".format(tx_id))
-                        return jsonify({"transaction_id": tx_id, "result": res})
-                
-                except Exception as e:
-                    logger.error("Error en pago: {}".format(e))
+                            self.tasks.pop(tx_id, None)
+                        self.internal_free_box(id_sucursal, nombre_caja, "timeout")
+                        return jsonify({"status": "timeout", "transaction_id": tx_id, "message": f"Timeout {TIMEOUT_SERVER}s"}), 504
+                    with self.tasks_lock:
+                        res = self.tasks.pop(tx_id)["result"]
                     with self.busy_lock:
                         self.busy_boxes.discard(key)
-                    return jsonify({"status": "error", "message": str(e)}), 500
-            
-            # ==========================================
-            # MERCADO PAGO
-            # ==========================================
+                    return jsonify({"transaction_id": tx_id, "result": res})
+
+                else:
+                    # remote enqueue -> expect remote agent to poll
+                    with self.tasks_lock:
+                        event = threading.Event()
+                        self.tasks[tx_id] = {"event": event, "result": None, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "timestamp": time.time()}
+                    task_payload = {"tx_id": tx_id, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "type": "transbank", "id_terminal": id_terminal, "amount": amount}
+                    q = self.ensure_queue(id_sucursal, nombre_caja)
+                    q.put(task_payload)
+                    logger.info("Tarea remota encolada tx=%s -> %s/%s", tx_id, id_sucursal, nombre_caja)
+                    finished = event.wait(timeout=TIMEOUT_SERVER)
+                    if not finished:
+                        with self.tasks_lock:
+                            self.tasks.pop(tx_id, None)
+                        self.internal_free_box(id_sucursal, nombre_caja, "timeout")
+                        return jsonify({"status": "timeout", "transaction_id": tx_id, "message": f"Timeout {TIMEOUT_SERVER}s"}), 504
+                    with self.tasks_lock:
+                        res = self.tasks.pop(tx_id)["result"]
+                    with self.busy_lock:
+                        self.busy_boxes.discard(key)
+                    return jsonify({"transaction_id": tx_id, "result": res})
+
+            # MercadoPago flow
             elif pos_type == "mercadopago":
-                terminal_id = data.get("terminal_id")
+                terminal_id = data.get("terminal_id", ID_TERMINAL)
                 access_token = data.get("access_token")
                 amount = data.get("amount")
-                
-                if not terminal_id or not access_token or amount is None:
+                if access_token is None or amount is None:
                     return jsonify({"error": "Faltan campos mercadopago"}), 400
-                
-                # Verifica autorización
-                mp_key = "{}:{}".format(id_sucursal, nombre_caja)
-                if ALLOWED_MP and mp_key not in ALLOWED_MP:
-                    logger.warning("Caja no autorizada para MP: {}".format(mp_key))
+                if ALLOWED_MP and f"{id_sucursal}:{nombre_caja}" not in ALLOWED_MP:
                     return jsonify({"status": "forbidden", "message": "Caja no autorizada para MP"}), 403
-                
-                try:
-                    result = self.process_mercadopago(terminal_id, access_token, amount)
-                    return jsonify(result), 200
-                except Exception as e:
-                    logger.error("Error Mercado Pago: {}".format(e))
-                    return jsonify({"status": "error", "message": str(e)}), 500
-            
+                res = process_mercadopago(terminal_id, access_token, amount)
+                return jsonify(res), 200
             else:
                 return jsonify({"error": "Tipo POS no soportado"}), 400
-        
+
         @self.app.route("/status")
         def http_status():
             with self.agents_lock:
                 agents_count = sum(len(boxes) for boxes in self.agents.values())
-            
             return jsonify({
                 "status": "ok",
                 "port": HTTP_PORT,
                 "id_sucursal": ID_SUCURSAL,
                 "nombre_caja": NOMBRE_CAJA,
-                "terminal_id": TERMINAL_ID,
+                "id_terminal": ID_TERMINAL,
                 "usa_pos_fisico": USAR_POS_FISICO,
-                "agents_count": agents_count
+                "agents_count": agents_count,
+                "current_port": self.pos.get_current_port()
             })
-        
-        @self.app.route("/debug/agents")
-        def debug_agents():
-            with self.agents_lock:
-                agents_info = {}
-                for id_sucursal, boxes in self.agents.items():
-                    for nombre_caja, info in boxes.items():
-                        key = "{}:{}".format(id_sucursal, nombre_caja)
-                        agents_info[key] = {
-                            "last_seen": info.get("last_seen"),
-                            "info": info.get("info", {})
-                        }
-                return jsonify(agents_info)
-    
+
+        @self.app.route("/debug/queues")
+        def debug_queues():
+            with self.queues_lock:
+                info = {}
+                for cid, boxes in self.queues.items():
+                    for box, q in boxes.items():
+                        info[f"{cid}:{box}"] = {"queued": q.qsize()}
+            return jsonify(info)
+
+    def internal_free_box(self, id_sucursal, nombre_caja, reason=""):
+        key = (id_sucursal, nombre_caja)
+        with self.busy_lock:
+            if key in self.busy_boxes:
+                self.busy_boxes.discard(key)
+                logger.info("Caja %s/%s liberada (%s)", id_sucursal, nombre_caja, reason)
+
     def run(self):
-        logger.info("🚀 Servidor iniciado en puerto {}".format(HTTP_PORT))
+        logger.info("Servidor Flask arrancando en puerto %s", HTTP_PORT)
+        # Note: use_reloader=False to avoid double-start when developing
         self.app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True, use_reloader=False)
 
-# ============================================
+# -----------------------
+# Tray icon (pystray) helpers
+# -----------------------
+class TrayIcon:
+    def __init__(self, pos_module):
+        self.icon = None
+        self.pos_module = pos_module
+
+    def create_image(self):
+        # create a simple square icon
+        size = (64, 64)
+        img = Image.new("RGBA", size, (33, 150, 243, 255))
+        dc = ImageDraw.Draw(img)
+        dc.rectangle([10, 10, 54, 54], fill=(255,255,255,255))
+        # draw small text "POS"
+        try:
+            fnt = ImageFont.load_default()
+            dc.text((18, 22), "POS", font=fnt, fill=(33,150,243,255))
+        except Exception:
+            dc.text((18, 22), "POS", fill=(33,150,243,255))
+        return img
+
+    def on_quit(self, icon, item):
+        logger.info("Tray -> salir solicitado")
+        try:
+            cleanup_lock()
+        finally:
+            os._exit(0)
+
+    def on_open_log(self, icon, item):
+        try:
+            os.startfile(LOG_FILE)
+        except Exception as e:
+            logger.error("No se pudo abrir log: %s", e)
+
+    def on_restart_pos(self, icon, item):
+        try:
+            logger.info("Tray -> Reiniciar POS manualmente")
+            new_port = self.pos_module.restart()
+            logger.info("Nuevo puerto detectado: %s", new_port)
+        except Exception as e:
+            logger.error("Error reiniciando POS desde tray: %s", e)
+
+    def run(self):
+        if not SYSTRAY_AVAILABLE:
+            logger.info("pystray no disponible, no se muestra icono")
+            return
+        try:
+            menu = (
+                pystray.MenuItem(f"{APP_NAME}", lambda : None, enabled=False),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Ver Log", self.on_open_log),
+                pystray.MenuItem("Reiniciar POS", self.on_restart_pos),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Salir", self.on_quit)
+            )
+            icon = pystray.Icon(APP_NAME, self.create_image(), APP_NAME, menu=pystray.Menu(*menu))
+            self.icon = icon
+            icon.run()
+        except Exception as e:
+            logger.error("Tray icon error: %s", e)
+
+# -----------------------
 # MAIN
-# ============================================
+# -----------------------
 def main():
     print("="*60)
     print("POS PAYMENT GATEWAY - TODO EN UNO")
     print("="*60)
-    print("Puerto HTTP: {}".format(HTTP_PORT))
-    print("Sucursal: {}".format(ID_SUCURSAL))
-    print("Caja: {}".format(NOMBRE_CAJA))
-    print("Terminal: {}".format(TERMINAL_ID))
-    print("POS Físico: {}".format("SI" if USAR_POS_FISICO else "NO"))
+    print("HTTP_PORT:", HTTP_PORT)
+    print("ID_SUCURSAL:", ID_SUCURSAL)
+    print("NOMBRE_CAJA:", NOMBRE_CAJA)
+    print("ID_TERMINAL:", ID_TERMINAL)
+    print("USAR_POS_FISICO:", USAR_POS_FISICO)
     print("="*60)
-    
-    logger.info("🚀 Iniciando POS Gateway...")
-    
+
+    logger.info("Iniciando POS Gateway...")
+
     if not ensure_single_instance():
-        print("\n❌ Ya hay una instancia corriendo")
-        print("Cierra la otra instancia o elimina el archivo:", LOCK_FILE)
-        input("\nPresiona Enter para salir...")
-        sys.exit(1)
-    
+        print("Ya hay otra instancia corriendo. Saliendo.")
+        return
+
     open_firewall_port(HTTP_PORT)
-    
-    # Inicia icono de bandeja
+
+    pos_module = POSModule(PUERTOS_COM)
+    pos_module.start_monitor()
+
+    server = APIServer(pos_module)
+
+    # start tray icon
     if SYSTRAY_AVAILABLE:
-        tray = SystemTrayIcon()
-        tray_thread = threading.Thread(target=tray.run, daemon=True)
-        tray_thread.start()
-        logger.info("✅ Icono de bandeja iniciado")
-    
+        tray = TrayIcon(pos_module)
+        t = threading.Thread(target=tray.run, daemon=True)
+        t.start()
+
     try:
-        pos_module = POSModule()
-        server = POSServer(pos_module)
-        
-        # Inicia servidor (bloqueante)
         server.run()
-        
     except KeyboardInterrupt:
-        logger.info("Cerrando por Ctrl+C...")
+        logger.info("Interrupción por teclado")
     except Exception as e:
-        logger.error("Error fatal: {}\n{}".format(e, traceback.format_exc()))
+        logger.error("Error fatal: %s\n%s", e, traceback.format_exc())
     finally:
+        server.stop_local_worker()
+        pos_module.stop_monitor()
         cleanup_lock()
-        logger.info("Aplicación cerrada")
+        logger.info("Aplicación finalizada")
 
 if __name__ == "__main__":
     main()
