@@ -581,57 +581,80 @@ class APIServer:
                     elif tipo == "mercadopago":
                         terminal_id = task.get("id_terminal") or ID_TERMINAL
                         access_token = task.get("access_token")
-
                         amount = task.get("amount")
                         result = process_mercadopago(terminal_id, access_token, amount)
+                    
                     else:
                         result = {"status": "error", "message": "Tipo no soportado"}
-                    # save result to tasks and free box
+                    
                     with self.tasks_lock:
                         entry = self.tasks.get(tx_id)
                         if entry:
-                            entry["result"] = result
+                            entry["result"] = result 
                             entry["event"].set()
+                    
+                    # Libera la caja
                     with self.busy_lock:
                         self.busy_boxes.discard((task.get("id_sucursal"), task.get("nombre_caja")))
+                    
                     logger.info("Local worker finalizó tx=%s res=%s", tx_id, result)
+                    
                 except Exception as e:
                     logger.error("Error en local worker: %s\n%s", e, traceback.format_exc())
+        
+        # Inicia el hilo worker
         self.local_worker_thread = threading.Thread(target=worker, daemon=True)
         self.local_worker_thread.start()
 
     def stop_local_worker(self):
-        self._stop_local_worker.set()
+        """Detiene el worker local"""
+        self._stop_local_worker.set() 
         try:
             if self.local_worker_thread:
-                self.local_worker_thread.join(timeout=1)
+                self.local_worker_thread.join(timeout=1) 
         except:
             pass
 
-    # --- Routes
+    # RUTAS HTTP (ENDPOINTS)
     def setup_routes(self):
+        """Define todas las rutas/endpoints del servidor Flask"""
+        
+        # POST /register_agent
+        # Endpoint para que agentes remotos se registren
         @self.app.route("/register_agent", methods=["POST"])
         def http_register_agent():
+            """Registra un agente en el sistema"""
             data = request.get_json(force=True, silent=True) or {}
             id_sucursal = data.get("id_sucursal")
             nombre_caja = data.get("nombre_caja")
             meta = data.get("meta", {})
+            
             if not id_sucursal or not nombre_caja:
                 return jsonify({"error": "id_sucursal y nombre_caja requeridos"}), 400
+            
             id_s = str(id_sucursal)
             nc = str(nombre_caja)
+            
             self.register_agent(id_s, nc, meta)
             logger.info("Agent registered: %s/%s meta=%s", id_s, nc, meta)
+            
             return jsonify({"status": "ok"})
 
+        # GET /poll
+        # Endpoint para que agentes remotos pidan tareas
         @self.app.route("/poll", methods=["GET"])
         def http_poll():
+            """Agentes remotos hacen polling para obtener tareas"""
             id_sucursal = request.args.get("id_sucursal")
             nombre_caja = request.args.get("nombre_caja")
+            
             if not id_sucursal or not nombre_caja:
                 return jsonify({"error": "id_sucursal y nombre_caja requeridos"}), 400
+            
             self.register_agent(str(id_sucursal), str(nombre_caja))
+            
             q = self.ensure_queue(str(id_sucursal), str(nombre_caja))
+            
             try:
                 task = q.get(timeout=2)
                 logger.info("Despachando tarea -> %s/%s tx=%s", id_sucursal, nombre_caja, task.get("tx_id"))
@@ -639,24 +662,33 @@ class APIServer:
             except queue.Empty:
                 return jsonify({"task": None, "heartbeat": True})
 
+        # POST /result
+        # Endpoint para que agentes remotos reporten resultados
         @self.app.route("/result", methods=["POST"])
         def http_result():
+            """Recibe el resultado de una tarea ejecutada por un agente remoto"""
             data = request.get_json(force=True, silent=True) or {}
             tx_id = data.get("tx_id")
             result = data.get("result")
+            
             if not tx_id or result is None:
                 return jsonify({"error": "tx_id y result requeridos"}), 400
+            
             with self.tasks_lock:
                 task = self.tasks.get(tx_id)
                 if not task:
                     logger.warning("Resultado para tx_id desconocido: %s", tx_id)
                     return jsonify({"status": "unknown_tx"}), 404
+                
                 if task.get("result") is not None:
                     logger.warning("Resultado duplicado tx=%s", tx_id)
                     return jsonify({"status": "already_processed"}), 200
+                
                 task["result"] = result
                 task["event"].set()
+            
             logger.info("Resultado guardado tx=%s: %s", tx_id, result)
+            
             try:
                 id_s = task.get("id_sucursal")
                 nc = task.get("nombre_caja")
@@ -664,33 +696,44 @@ class APIServer:
                     self.busy_boxes.discard((id_s, nc))
             except:
                 pass
+            
             return jsonify({"status": "ok"})
 
+        # POST /pago
+        # Endpoint principal para procesar pagos
         @self.app.route("/pago", methods=["POST"])
         def http_pago():
+            """
+            Procesa un pago (Transbank o Mercado Pago).
+            Determina si es local o remoto y actúa en consecuencia.
+            """
             data = request.get_json(force=True, silent=True) or {}
             id_sucursal = data.get("id_sucursal")
             nombre_caja = data.get("nombre_caja")
             pos_type = data.get("type")
+            
             logger.info("[HTTP /pago] Petición recibida: %s", json.dumps(data, ensure_ascii=False))
+            
             if id_sucursal is not None:
                 id_sucursal = str(id_sucursal)
             if nombre_caja is not None:
                 nombre_caja = str(nombre_caja)
+            
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
 
-            # check if this machine is target (local)
             is_local = (id_sucursal == str(ID_SUCURSAL) and nombre_caja == str(NOMBRE_CAJA))
 
-            # Transbank flow
+            # FLUJO TRANSBANK
             if pos_type == "transbank":
-                id_terminal = data.get("id_terminal", ID_TERMINAL)   # changed from pos_id -> id_terminal
+                id_terminal = data.get("id_terminal", ID_TERMINAL)
                 amount = data.get("amount")
+                
                 if amount is None:
                     return jsonify({"error": "amount requerido"}), 400
 
                 key = (id_sucursal, nombre_caja)
+                
                 with self.busy_lock:
                     if key in self.busy_boxes:
                         logger.warning("Caja ocupada: %s/%s", id_sucursal, nombre_caja)
@@ -699,66 +742,143 @@ class APIServer:
 
                 tx_id = str(uuid.uuid4())
 
-                # If is local, enqueue to local queue (worker will process)
+                # ===== PROCESAMIENTO LOCAL =====
                 if is_local:
+                    # Crea la tarea con su event
                     with self.tasks_lock:
                         event = threading.Event()
-                        self.tasks[tx_id] = {"event": event, "result": None, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "timestamp": time.time()}
-                    task_payload = {"tx_id": tx_id, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "type": "transbank", "id_terminal": id_terminal, "amount": amount}
+                        self.tasks[tx_id] = {
+                            "event": event, 
+                            "result": None, 
+                            "id_sucursal": id_sucursal, 
+                            "nombre_caja": nombre_caja, 
+                            "timestamp": time.time()
+                        }
+                    
+                    # Crea el payload de la tarea
+                    task_payload = {
+                        "tx_id": tx_id, 
+                        "id_sucursal": id_sucursal, 
+                        "nombre_caja": nombre_caja, 
+                        "type": "transbank", 
+                        "id_terminal": id_terminal, 
+                        "amount": amount
+                    }
+                    
+                    # Encola la tarea (el worker local la procesará)
                     q = self.ensure_queue(id_sucursal, nombre_caja)
                     q.put(task_payload)
                     logger.info("Tarea local encolada tx=%s -> %s/%s", tx_id, id_sucursal, nombre_caja)
+                    
+                    # Espera el resultado (timeout TIMEOUT_SERVER)
                     finished = self.tasks[tx_id]["event"].wait(timeout=TIMEOUT_SERVER)
+                    
+                    # Si hay timeout
                     if not finished:
                         with self.tasks_lock:
                             self.tasks.pop(tx_id, None)
                         self.internal_free_box(id_sucursal, nombre_caja, "timeout")
-                        return jsonify({"status": "timeout", "transaction_id": tx_id, "message": f"Timeout {TIMEOUT_SERVER}s"}), 504
+                        return jsonify({
+                            "status": "timeout", 
+                            "transaction_id": tx_id, 
+                            "message": f"Timeout {TIMEOUT_SERVER}s"
+                        }), 504
+                    
+                    # Obtiene el resultado
                     with self.tasks_lock:
                         res = self.tasks.pop(tx_id)["result"]
+                    
+                    # Libera la caja
                     with self.busy_lock:
                         self.busy_boxes.discard(key)
+                    
                     return jsonify({"transaction_id": tx_id, "result": res})
 
+                # ===== PROCESAMIENTO REMOTO =====
                 else:
-                    # remote enqueue -> expect remote agent to poll
+                    # Crea la tarea con su event
                     with self.tasks_lock:
                         event = threading.Event()
-                        self.tasks[tx_id] = {"event": event, "result": None, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "timestamp": time.time()}
-                    task_payload = {"tx_id": tx_id, "id_sucursal": id_sucursal, "nombre_caja": nombre_caja, "type": "transbank", "id_terminal": id_terminal, "amount": amount}
+                        self.tasks[tx_id] = {
+                            "event": event, 
+                            "result": None, 
+                            "id_sucursal": id_sucursal, 
+                            "nombre_caja": nombre_caja, 
+                            "timestamp": time.time()
+                        }
+                    
+                    # Crea el payload de la tarea
+                    task_payload = {
+                        "tx_id": tx_id, 
+                        "id_sucursal": id_sucursal, 
+                        "nombre_caja": nombre_caja, 
+                        "type": "transbank", 
+                        "id_terminal": id_terminal, 
+                        "amount": amount
+                    }
+                    
+                    # Encola para el agente remoto
                     q = self.ensure_queue(id_sucursal, nombre_caja)
                     q.put(task_payload)
                     logger.info("Tarea remota encolada tx=%s -> %s/%s", tx_id, id_sucursal, nombre_caja)
+                    
+                    # Espera el resultado
                     finished = event.wait(timeout=TIMEOUT_SERVER)
+                    
+                    # Si hay timeout
                     if not finished:
                         with self.tasks_lock:
                             self.tasks.pop(tx_id, None)
                         self.internal_free_box(id_sucursal, nombre_caja, "timeout")
-                        return jsonify({"status": "timeout", "transaction_id": tx_id, "message": f"Timeout {TIMEOUT_SERVER}s"}), 504
+                        return jsonify({
+                            "status": "timeout", 
+                            "transaction_id": tx_id, 
+                            "message": f"Timeout {TIMEOUT_SERVER}s"
+                        }), 504
+                    
+                    # Obtiene el resultado
                     with self.tasks_lock:
                         res = self.tasks.pop(tx_id)["result"]
+                    
+                    # Libera la caja
                     with self.busy_lock:
                         self.busy_boxes.discard(key)
+                    
                     return jsonify({"transaction_id": tx_id, "result": res})
 
-            # MercadoPago flow
+            # FLUJO MERCADO PAGO
             elif pos_type == "mercadopago":
                 terminal_id = data.get("terminal_id", ID_TERMINAL)
                 access_token = data.get("access_token")
                 amount = data.get("amount")
+                
+                # Validación
                 if access_token is None or amount is None:
                     return jsonify({"error": "Faltan campos mercadopago"}), 400
+                
+                # Verifica autorización (si hay lista de permitidos)
                 if ALLOWED_MP and f"{id_sucursal}:{nombre_caja}" not in ALLOWED_MP:
-                    return jsonify({"status": "forbidden", "message": "Caja no autorizada para MP"}), 403
+                    return jsonify({
+                        "status": "forbidden", 
+                        "message": "Caja no autorizada para MP"
+                    }), 403
+                
+                # Procesa el pago (sin encolar, se procesa directamente)
                 res = process_mercadopago(terminal_id, access_token, amount)
                 return jsonify(res), 200
+            
             else:
                 return jsonify({"error": "Tipo POS no soportado"}), 400
 
+        # GET /status
+        # Endpoint para ver el estado del servidor
         @self.app.route("/status")
         def http_status():
+            """Retorna información del estado del servidor"""
             with self.agents_lock:
+                # Cuenta cuántos agentes hay registrados
                 agents_count = sum(len(boxes) for boxes in self.agents.values())
+            
             return jsonify({
                 "status": "ok",
                 "port": HTTP_PORT,
@@ -767,11 +887,14 @@ class APIServer:
                 "id_terminal": ID_TERMINAL,
                 "usa_pos_fisico": USAR_POS_FISICO,
                 "agents_count": agents_count,
-                "current_port": self.pos.get_current_port()
+                "current_port": self.pos.get_current_port()  # Puerto COM actual
             })
 
+        # GET /debug/queues
+        # Endpoint de debug para ver estado de las colas
         @self.app.route("/debug/queues")
         def debug_queues():
+            """Retorna información de las colas (para debug)"""
             with self.queues_lock:
                 info = {}
                 for cid, boxes in self.queues.items():
@@ -780,6 +903,10 @@ class APIServer:
             return jsonify(info)
 
     def internal_free_box(self, id_sucursal, nombre_caja, reason=""):
+        """
+        Libera una caja ocupada.
+        Se usa internamente cuando hay timeout o errores.
+        """
         key = (id_sucursal, nombre_caja)
         with self.busy_lock:
             if key in self.busy_boxes:
@@ -787,31 +914,49 @@ class APIServer:
                 logger.info("Caja %s/%s liberada (%s)", id_sucursal, nombre_caja, reason)
 
     def run(self):
+        """Inicia el servidor Flask (bloqueante)"""
         logger.info("Servidor Flask arrancando en puerto %s", HTTP_PORT)
-        # Note: use_reloader=False to avoid double-start when developing
         self.app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True, use_reloader=False)
 
-# -----------------------
-# Tray icon (pystray) helpers
-# -----------------------
+# ICONO EN BANDEJA DEL SISTEMA
+# Muestra un icono en el system tray con menú
 class TrayIcon:
+    """
+    Clase que maneja el icono en la bandeja del sistema.
+    Muestra un menú con opciones:
+    - Ver log
+    - Reiniciar POS
+    - Salir
+    """
+    
     def __init__(self, pos_module):
+        """
+        Inicializa el icono.
+        pos_module: Referencia al módulo POS para poder reiniciarlo
+        """
         self.icon = None
         self.pos_module = pos_module
 
     def create_image(self):
+        """
+        Crea la imagen del icono.
+        Retorna un objeto Image de PIL.
+        """
         size = (64, 64)
-        img = Image.new("RGBA", size, (255, 255, 255, 255))  # fondo blanco
+        img = Image.new("RGBA", size, (33, 150, 243, 255))
         dc = ImageDraw.Draw(img)
+        dc.rectangle([10, 10, 54, 54], fill=(255, 255, 255, 255))
+        
         try:
-            font = ImageFont.truetype("arial.ttf", 28)
-        except:
-            font = None
-        dc.text((10, 15), "T", fill=(128, 0, 128, 255), font=font)   # morado
-        dc.text((35, 15), "M", fill=(255, 215, 0, 255), font=font)   # amarillo
+            fnt = ImageFont.load_default()
+            dc.text((18, 22), "POS", font=fnt, fill=(33, 150, 243, 255))
+        except Exception:
+            dc.text((18, 22), "POS", fill=(33, 150, 243, 255))
+        
         return img
 
     def on_quit(self, icon, item):
+        """Handler cuando el usuario hace click en "Salir" """
         logger.info("Tray -> salir solicitado")
         try:
             cleanup_lock()
@@ -819,83 +964,103 @@ class TrayIcon:
             os._exit(0)
 
     def on_open_log(self, icon, item):
+        """Handler cuando el usuario hace click en "Ver Log" """
         try:
-            os.startfile(LOG_FILE)
+            os.startfile(LOG_FILE) 
         except Exception as e:
             logger.error("No se pudo abrir log: %s", e)
 
     def on_restart_pos(self, icon, item):
+        """Handler cuando el usuario hace click en "Reiniciar POS" """
         try:
             logger.info("Tray -> Reiniciar POS manualmente")
-            new_port = self.pos_module.restart()
+            new_port = self.pos_module.restart() 
             logger.info("Nuevo puerto detectado: %s", new_port)
         except Exception as e:
             logger.error("Error reiniciando POS desde tray: %s", e)
 
     def run(self):
+        """Inicia el icono en la bandeja (bloqueante)"""
         if not SYSTRAY_AVAILABLE:
             logger.info("pystray no disponible, no se muestra icono")
             return
+        
         try:
             menu = (
-                pystray.MenuItem(f"{APP_NAME}", lambda : None, enabled=False),
+                pystray.MenuItem(f"{APP_NAME}", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Ver Log", self.on_open_log),
-                pystray.MenuItem("Reiniciar POS", self.on_restart_pos),
+                #pystray.MenuItem("Reiniciar POS", self.on_restart_pos),  # Opción: Reiniciar POS
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Salir", self.on_quit)
             )
+            
+            # Crea el icono
             icon = pystray.Icon(APP_NAME, self.create_image(), APP_NAME, menu=pystray.Menu(*menu))
             self.icon = icon
+            
+            # Inicia el icono (bloqueante - corre en el hilo actual)
             icon.run()
+            
         except Exception as e:
             logger.error("Tray icon error: %s", e)
 
-# -----------------------
-# MAIN
-# -----------------------
+# FUNCIÓN PRINCIPAL
 def main():
-    print("="*60)
+    """Función principal que inicia toda la aplicación"""
+    
+    # Banner de inicio
+    print("=" * 60)
     print("POS PAYMENT GATEWAY - TODO EN UNO")
-    print("="*60)
+    print("=" * 60)
     print("HTTP_PORT:", HTTP_PORT)
     print("ID_SUCURSAL:", ID_SUCURSAL)
     print("NOMBRE_CAJA:", NOMBRE_CAJA)
     print("ID_TERMINAL:", ID_TERMINAL)
     print("USAR_POS_FISICO:", USAR_POS_FISICO)
-    print("="*60)
+    print("=" * 60)
 
     logger.info("Iniciando POS Gateway...")
 
+    # Verifica instancia única
     if not ensure_single_instance():
         print("Ya hay otra instancia corriendo. Saliendo.")
         return
 
+    # Intenta abrir puerto en firewall
     open_firewall_port(HTTP_PORT)
 
+    # Crea el módulo POS
     pos_module = POSModule(PUERTOS_COM)
+    
+    # Inicia el monitor del POS (verifica constantemente si está conectado)
     pos_module.start_monitor()
 
+    # Crea el servidor API
     server = APIServer(pos_module)
 
-    # start tray icon
+    # Inicia el icono de bandeja en un hilo separado
     if SYSTRAY_AVAILABLE:
         tray = TrayIcon(pos_module)
         t = threading.Thread(target=tray.run, daemon=True)
         t.start()
 
     try:
+        # Inicia el servidor Flask (bloqueante - corre en el hilo principal)
         server.run()
     except KeyboardInterrupt:
+        # Si el usuario presiona Ctrl+C
         logger.info("Interrupción por teclado")
     except Exception as e:
+        # Error fatal
         logger.error("Error fatal: %s\n%s", e, traceback.format_exc())
     finally:
-        server.stop_local_worker()
-        pos_module.stop_monitor()
-        cleanup_lock()
+        # Limpieza al salir
+        server.stop_local_worker()  # Detiene el worker local
+        pos_module.stop_monitor()  # Detiene el monitor del POS
+        cleanup_lock()  # Elimina el archivo de lock
         logger.info("Aplicación finalizada")
 
+# PUNTO DE ENTRADA
 if __name__ == "__main__":
-    main()
-    
+    main()  # Ejecuta la función principal
