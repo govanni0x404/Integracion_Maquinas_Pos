@@ -800,17 +800,15 @@ class TrayIcon:
         self.pos_module = pos_module
 
     def create_image(self):
-        # create a simple square icon
         size = (64, 64)
-        img = Image.new("RGBA", size, (33, 150, 243, 255))
+        img = Image.new("RGBA", size, (255, 255, 255, 255))  # fondo blanco
         dc = ImageDraw.Draw(img)
-        dc.rectangle([10, 10, 54, 54], fill=(255,255,255,255))
-        # draw small text "POS"
         try:
-            fnt = ImageFont.load_default()
-            dc.text((18, 22), "POS", font=fnt, fill=(33,150,243,255))
-        except Exception:
-            dc.text((18, 22), "POS", fill=(33,150,243,255))
+            font = ImageFont.truetype("arial.ttf", 28)
+        except:
+            font = None
+        dc.text((10, 15), "T", fill=(128, 0, 128, 255), font=font)   # morado
+        dc.text((35, 15), "M", fill=(255, 215, 0, 255), font=font)   # amarillo
         return img
 
     def on_quit(self, icon, item):
