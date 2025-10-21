@@ -1,104 +1,101 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-ApiPagoElectronico_unificado.py
-Servidor + Agente + Tray icon + Logging + Single instance
-Soporta: transbank (POS físico) y mercadopago (API)
-Lee configuración desde .env
-"""
+import os          
+import sys        
+import time        
+import uuid        
+import json        
+import gc          
+import queue       
+import socket      
+import logging     
+import traceback   
+import threading   
+import requests    
+from pathlib import Path                      
+from logging.handlers import RotatingFileHandler 
+from datetime import datetime                   
+from dotenv import load_dotenv                   
 
-import os
-import sys
-import time
-import uuid
-import json
-import gc
-import queue
-import socket
-import logging
-import traceback
-import threading
-import requests
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
-from datetime import datetime
-from dotenv import load_dotenv
-
-# Opcionales
+# IMPORTACIONES OPCIONALES
 try:
-    from flask import Flask, request, jsonify
-    from flask_cors import CORS
-    FLASK_AVAILABLE = True
+    from flask import Flask, request, jsonify  
+    from flask_cors import CORS              
+    FLASK_AVAILABLE = True             
 except Exception:
-    FLASK_AVAILABLE = False
+    FLASK_AVAILABLE = False                   
 
 try:
     import serial.tools.list_ports
-    from transbank import POSIntegrado
-    TRANSBANK_AVAILABLE = True
+    from transbank import POSIntegrado  
+    TRANSBANK_AVAILABLE = True    
 except Exception:
-    TRANSBANK_AVAILABLE = False
+    TRANSBANK_AVAILABLE = False  
 
 try:
-    import pystray
-    from PIL import Image, ImageDraw, ImageFont
-    SYSTRAY_AVAILABLE = True
+    import pystray                          
+    from PIL import Image, ImageDraw, ImageFont  
+    SYSTRAY_AVAILABLE = True               
 except Exception:
-    SYSTRAY_AVAILABLE = False
+    SYSTRAY_AVAILABLE = False             
 
-# Safety for sys.stdout/stderr when --noconsole packaging
-if getattr(sys, "stdout", None):
+# Safety para cuando se empaqueta con --noconsole
+if getattr(sys, "stdout", None):  # Si stdout existe
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8")  
     except Exception:
         pass
-if getattr(sys, "stderr", None):
+
+if getattr(sys, "stderr", None):  # Si stderr existe
     try:
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
-        pass
+        pass 
 
-# Load env
+
 load_dotenv()
 
-# -----------------------
-# Configuration from .env
-# -----------------------
+# CONFIGURACIÓN GLOBAL
 APP_NAME = os.environ.get("APP_NAME", "POS Gateway")
+
 LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
+
 LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
 
 HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5000")))
 
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
 NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
-ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
+ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}")) 
 
 USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "true").lower() == "true"
 PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM7,COM6,COM8")
 
 MAX_TRANSACTION_TIME = int(os.environ.get("MAX_TRANSACTION_TIME", "90"))
-TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120"))
+TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120")) 
 
 ALLOWED_MP = set([x.strip() for x in os.environ.get("ALLOWED_MP", "").split(",") if x.strip()])
 MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders")
 
-# -----------------------
-# Logging
-# -----------------------
+# CONFIGURACIÓN DE LOGGING
+# Handler que rota el archivo cuando llega a 10MB, mantiene 5 backups
 handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO, 
+    format="%(asctime)s [%(levelname)s] %(message)s", 
     handlers=[handler, logging.StreamHandler()]
 )
+
 logger = logging.getLogger(APP_NAME)
 
-# -----------------------
-# Single instance lock
-# -----------------------
+# INSTANCIA ÚNICA
 def ensure_single_instance():
-    lock_path = Path(LOCK_FILE)
+    """
+    Verifica si ya hay otra instancia corriendo.
+    Usa un archivo de lock con el PID del proceso.
+    Retorna True si puede correr, False si ya hay otra instancia.
+    """
+    lock_path = Path(LOCK_FILE)  # Ruta del archivo de lock
+    
     if lock_path.exists():
         try:
             with open(lock_path, "r") as f:
@@ -106,7 +103,7 @@ def ensure_single_instance():
             try:
                 os.kill(pid, 0)
                 logger.error("Otra instancia detectada (PID=%s).", pid)
-                return False
+                return False 
             except OSError:
                 lock_path.unlink()
         except Exception:
@@ -114,6 +111,8 @@ def ensure_single_instance():
                 lock_path.unlink()
             except Exception:
                 pass
+    
+    # Crea el archivo de lock con el PID actual
     try:
         with open(lock_path, "w") as f:
             f.write(str(os.getpid()))
@@ -124,23 +123,33 @@ def ensure_single_instance():
         return False
 
 def cleanup_lock():
+    """
+    Elimina el archivo de lock al cerrar la aplicación.
+    Se llama en el finally del main.
+    """
     try:
         Path(LOCK_FILE).unlink(missing_ok=True)
     except Exception:
-        pass
+        pass 
 
-# -----------------------
-# Firewall helper (Windows)
-# -----------------------
+# APERTURA DE PUERTO EN FIREWALL (Windows)
+# Intenta abrir el puerto automáticamente
 def open_firewall_port(port):
+    """
+    Intenta abrir el puerto en Windows Firewall usando netsh.
+    Requiere permisos de administrador para funcionar.
+    """
     try:
         import subprocess
         rule_name = f"{APP_NAME}_Port_{port}"
+        
         check_cmd = f'netsh advfirewall firewall show rule name="{rule_name}"'
         result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+        
         if "No rules match" in result.stdout:
             add_cmd = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport={port}'
             res = subprocess.run(add_cmd, shell=True, capture_output=True, text=True)
+            
             if res.returncode == 0:
                 logger.info("Puerto %s abierto en firewall", port)
             else:
@@ -150,19 +159,38 @@ def open_firewall_port(port):
     except Exception as e:
         logger.warning("open_firewall_port error: %s", e)
 
-# -----------------------
-# POS Module: detection + sale + monitor
-# -----------------------
+# MÓDULO POS (TRANSBANK)
 class POSModule:
+    """
+    Clase que maneja el POS físico Transbank:
+    - Detecta automáticamente el puerto COM
+    - Mantiene un caché del puerto detectado
+    - Ejecuta ventas con timeout
+    - Monitorea constantemente el POS
+    """
+    
     def __init__(self, prefer_ports):
+        """
+        Inicializa el módulo POS.
+        prefer_ports: String con puertos preferidos separados por coma (ej: "COM7,COM6")
+        """
         self.prefer_ports = [p.strip() for p in prefer_ports.split(",") if p.strip()]
+        
         self.current_port = None
+        
         self.lock = threading.Lock()
+        
         self._stop_monitor = threading.Event()
+        
         self.monitor_thread = None
+        
         self.last_ok = 0
 
     def list_ports(self):
+        """
+        Lista todos los puertos COM disponibles en el sistema.
+        Retorna una lista de strings con los nombres de los puertos.
+        """
         try:
             ports = [p.device for p in serial.tools.list_ports.comports()]
             return ports
@@ -170,62 +198,94 @@ class POSModule:
             return []
 
     def detect_port(self):
+        """
+        Detecta en qué puerto COM está conectado el POS.
+        Intenta primero los puertos preferidos, luego el resto.
+        Retorna el puerto detectado o None si no encuentra.
+        """
         if not USAR_POS_FISICO or not TRANSBANK_AVAILABLE:
             logger.debug("POS físico deshabilitado o SDK no presente")
             return None
 
         ports = self.list_ports()
         logger.info("Puertos detectados: %s | Preferidos: %s", ports, ",".join(self.prefer_ports))
+        
         ordered = [p for p in self.prefer_ports if p in ports] + [p for p in ports if p not in self.prefer_ports]
+        
         for p in ordered:
             pos = None
             try:
                 pos = POSIntegrado()
+                
                 if pos.open_port(p) and pos.poll():
                     try:
                         pos.close_port()
                     except:
                         pass
+                    
                     logger.info("POS detectado en %s", p)
+                    
                     with self.lock:
                         self.current_port = p
+                    
                     self.last_ok = time.time()
-                    return p
+                    
+                    return p 
+                    
             except Exception as e:
                 logger.debug("Puerto %s no usable: %s", p, e)
             finally:
+                # Siempre intenta cerrar el puerto
                 try:
                     if pos:
                         pos.close_port()
                 except:
                     pass
+        
         logger.warning("No se detectó POS en los puertos listados")
+        
+        # Limpia el caché
         with self.lock:
             self.current_port = None
+        
         return None
 
     def get_current_port(self):
+        """
+        Obtiene el puerto actualmente en caché (thread-safe).
+        Retorna el puerto o None.
+        """
         with self.lock:
             return self.current_port
 
     def open_port_and_sale(self, port, amount):
-        # Ejecuta venta en POSIntegrado
+        """
+        Abre el puerto especificado y ejecuta una venta.
+        port: Puerto COM (ej: "COM7")
+        amount: Monto de la venta
+        Retorna un dict con el resultado de la venta.
+        """
         if not TRANSBANK_AVAILABLE:
             return {"status": "error", "message": "Transbank SDK no disponible"}
+        
         pos = None
         try:
             pos = POSIntegrado()
             if not pos.open_port(port):
                 return {"status": "error", "message": f"No se pudo abrir {port}"}
+            
             ticket = time.strftime("%H%M%S")
             logger.info("Venta POS -> puerto=%s monto=%s ticket=%s", port, amount, ticket)
+            
             res = pos.sale(amount, ticket)
             logger.info("Respuesta POS: %s", res)
+            
             if res.get("response_code") in ("0", "00"):
-                self.last_ok = time.time()
+                self.last_ok = time.time() 
                 return {"status": "success", "response": res}
             else:
                 return {"status": "failed", "response": res}
+                
         except Exception as e:
             logger.error("Error do_sale: %s\n%s", e, traceback.format_exc())
             return {"status": "error", "message": str(e)}
@@ -235,44 +295,64 @@ class POSModule:
                     pos.close_port()
             except:
                 pass
-            gc.collect()
+            gc.collect()  
 
     def do_sale_with_timeout(self, amount, timeout=MAX_TRANSACTION_TIME):
+        """
+        Ejecuta una venta con timeout para evitar bloqueos infinitos.
+        amount: Monto de la venta
+        timeout: Tiempo máximo de espera en segundos
+        Retorna el resultado de la venta o error de timeout.
+        """
         port = self.get_current_port() or self.detect_port()
+        
         if not port:
             return {"status": "error", "message": "No se detectó POS conectado"}
+        
         result = {}
+        
         def worker():
+            """Worker que ejecuta la venta en un hilo separado"""
             nonlocal result
             result = self.open_port_and_sale(port, amount)
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
+        
         t.join(timeout=timeout)
+        
         if t.is_alive():
             logger.error("Timeout en venta POS (thread sigue vivo).")
             return {"status": "error", "message": "Timeout en venta POS"}
-        return result
+        return result 
 
     def start_monitor(self, interval=5):
+        """
+        Inicia un hilo monitor que verifica constantemente el POS.
+        interval: Intervalo de verificación en segundos
+        """
         if not USAR_POS_FISICO or not TRANSBANK_AVAILABLE:
             logger.info("Monitor POS no iniciado (no use POS físico o SDK falta)")
             return
+        
         if self.monitor_thread and self.monitor_thread.is_alive():
             return
+        
         self._stop_monitor.clear()
+        
         def monitor():
+            """Función del hilo monitor"""
             while not self._stop_monitor.is_set():
                 try:
                     if not self.get_current_port():
                         self.detect_port()
                     else:
-                        # check quick poll
                         p = self.get_current_port()
                         try:
                             pos = POSIntegrado()
                             ok = pos.open_port(p) and pos.poll()
                             pos.close_port()
+                            
                             if not ok:
                                 logger.warning("POS en %s dejó de responder, limpiando puerto.", p)
                                 with self.lock:
@@ -280,16 +360,19 @@ class POSModule:
                         except Exception:
                             with self.lock:
                                 self.current_port = None
+                    
                     time.sleep(interval)
                 except Exception as e:
                     logger.debug("Monitor POS error: %s", e)
                     time.sleep(interval)
+        
         self.monitor_thread = threading.Thread(target=monitor, daemon=True)
         self.monitor_thread.start()
         logger.info("Monitor POS iniciado")
 
     def stop_monitor(self):
-        self._stop_monitor.set()
+        """Detiene el hilo monitor"""
+        self._stop_monitor.set() 
         try:
             if self.monitor_thread:
                 self.monitor_thread.join(timeout=1)
@@ -298,83 +381,126 @@ class POSModule:
         logger.info("Monitor POS detenido")
 
     def restart(self):
+        """
+        Reinicia el módulo POS: limpia el caché y redetecta.
+        Útil para cuando el POS se desconecta y reconecta.
+        """
         logger.info("Reiniciando POS module (clear port + redetect)...")
         with self.lock:
-            self.current_port = None
+            self.current_port = None 
         return self.detect_port()
 
-# -----------------------
-# MercadoPago helper
-# -----------------------
+# MERCADO PAGO
 def process_mercadopago(terminal_id, access_token, amount):
+    """
+    Procesa un pago con Mercado Pago Point.
+    terminal_id: ID del terminal de Mercado Pago
+    access_token: Token de acceso de la cuenta
+    amount: Monto del pago
+    Retorna un dict con el resultado.
+    """
     logger.info("Procesando MercadoPago terminal=%s monto=%s", terminal_id, amount)
+    
     idempotency_key = str(uuid.uuid4())
+    
     payload = {
-        "type": "point",
+        "type": "point", 
         "external_reference": f"ext_ref_{uuid.uuid4().hex[:8]}",
-        "expiration_time": "PT16M",
-        "transactions": {"payments": [{"amount": str(amount)}]},
-        "config": {"point": {"terminal_id": terminal_id, "print_on_terminal": "no_ticket"}},
+        "expiration_time": "PT16M", 
+        "transactions": {"payments": [{"amount": str(amount)}]}, 
+        "config": {
+            "point": {
+                "terminal_id": terminal_id,
+                "print_on_terminal": "no_ticket" 
+            }
+        },
         "description": "Venta POS"
     }
+    
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "X-Idempotency-Key": idempotency_key
     }
+    
     try:
         resp = requests.post(MP_API_URL, json=payload, headers=headers, timeout=15)
         data_resp = resp.json()
+        
         if resp.status_code != 201:
             logger.warning("Error creando orden MP: %s %s", resp.status_code, data_resp)
             return {"status": "failed", "http_status": resp.status_code, "response": data_resp}
+        
         order_id = data_resp["id"]
         logger.info("Orden MP creada: %s; esperando resultado...", order_id)
+        
         start = time.time()
         while time.time() - start < TIMEOUT_SERVER:
             check = requests.get(f"{MP_API_URL}/{order_id}", headers=headers, timeout=10)
             order_info = check.json()
             status = order_info.get("status")
+            
             if status in ("created", "in_process", "at_terminal"):
                 time.sleep(3)
                 continue
+            
             logger.info("Orden %s finalizada con estado: %s", order_id, status)
             return {"status": status, "order_id": order_id, "response": order_info}
+        
         logger.warning("Timeout esperando respuesta MP orden %s", order_id)
         return {"status": "timeout", "order_id": order_id}
+        
     except Exception as e:
         logger.error("Error MercadoPago: %s\n%s", e, traceback.format_exc())
         return {"status": "error", "message": str(e)}
 
-# -----------------------
-# Server (Flask) + local queue processing
-# -----------------------
+# SERVIDOR API (FLASK)
 class APIServer:
+    """
+    Servidor Flask que:
+    - Recibe peticiones HTTP (/pago, /status, etc.)
+    - Maneja colas de tareas por cada caja
+    - Procesa tareas locales en un worker
+    - Coordina agentes remotos
+    """
+    
     def __init__(self, pos_module):
+        """
+        Inicializa el servidor.
+        pos_module: Instancia de POSModule para procesar pagos Transbank
+        """
         if not FLASK_AVAILABLE:
             logger.critical("Flask no instalado - no se puede iniciar servidor")
             raise RuntimeError("Flask requerido")
+        
         self.pos = pos_module
-        self.app = Flask(__name__)
+        self.app = Flask(__name__) 
         CORS(self.app)
-        # shared state
-        self.queues = {}            # {id_sucursal: {nombre_caja: Queue()}}
+        
+        self.queues = {}
         self.queues_lock = threading.Lock()
-        self.agents = {}            # registered agents
+        
+        self.agents = {} 
         self.agents_lock = threading.Lock()
-        self.tasks = {}
+        
+        self.tasks = {} 
         self.tasks_lock = threading.Lock()
-        self.busy_boxes = set()
+        
+        self.busy_boxes = set() 
         self.busy_lock = threading.Lock()
-        # local processing worker (consumes local queue)
+        
         self.local_worker_thread = None
         self._stop_local_worker = threading.Event()
 
-        self.setup_routes()
-        self.register_local_agent()
-        self.start_local_worker()
+        self.setup_routes() 
+        self.register_local_agent() 
+        self.start_local_worker() 
 
     def ensure_queue(self, id_sucursal, nombre_caja):
+        """
+        Asegura que exista una cola para la caja especificada.
+        Retorna la cola (Queue).
+        """
         with self.queues_lock:
             if id_sucursal not in self.queues:
                 self.queues[id_sucursal] = {}
@@ -383,45 +509,79 @@ class APIServer:
             return self.queues[id_sucursal][nombre_caja]
 
     def register_agent(self, id_sucursal, nombre_caja, info=None):
+        """
+        Registra un agente (caja) en el sistema.
+        id_sucursal: ID de la sucursal
+        nombre_caja: Nombre de la caja
+        info: Información adicional (metadata)
+        """
         with self.agents_lock:
-            self.agents.setdefault(id_sucursal, {})[nombre_caja] = {"last_seen": time.time(), "info": info or {}}
+            self.agents.setdefault(id_sucursal, {})[nombre_caja] = {
+                "last_seen": time.time(),
+                "info": info or {}
+            }
+        
         self.ensure_queue(id_sucursal, nombre_caja)
+        
         with self.busy_lock:
             key = (id_sucursal, nombre_caja)
             if key in self.busy_boxes:
-                # release if no active task
                 with self.tasks_lock:
-                    active = any(t.get("id_sucursal")==id_sucursal and t.get("nombre_caja")==nombre_caja for t in self.tasks.values())
+                    active = any(
+                        t.get("id_sucursal") == id_sucursal and t.get("nombre_caja") == nombre_caja 
+                        for t in self.tasks.values()
+                    )
+                
                 if not active:
                     self.busy_boxes.discard(key)
                     logger.info("Caja %s/%s liberada por reconexión", id_sucursal, nombre_caja)
 
     def register_local_agent(self):
-        # register this machine as agent
-        info = {"host": socket.gethostname(), "terminal_id": ID_TERMINAL, "usa_pos_fisico": USAR_POS_FISICO, "local": True}
+        """
+        Registra esta máquina como un agente local.
+        Se llama al iniciar el servidor.
+        """
+        info = {
+            "host": socket.gethostname(),
+            "terminal_id": ID_TERMINAL,
+            "usa_pos_fisico": USAR_POS_FISICO,
+            "local": True
+        }
         self.register_agent(ID_SUCURSAL, NOMBRE_CAJA, info)
         logger.info("Agente local registrado %s/%s", ID_SUCURSAL, NOMBRE_CAJA)
 
     def start_local_worker(self):
+        """
+        Inicia un hilo worker que procesa la cola LOCAL.
+        Este worker saca tareas de la cola y las ejecuta (Transbank o MP).
+        """
         self._stop_local_worker.clear()
+        
         def worker():
+            """Función del hilo worker"""
             logger.info("Local worker iniciado (procesa la cola local)...")
+            
             q = self.ensure_queue(ID_SUCURSAL, NOMBRE_CAJA)
+            
             while not self._stop_local_worker.is_set():
                 try:
                     task = q.get(timeout=1)
                 except queue.Empty:
                     continue
+                
                 try:
                     tx_id = task.get("tx_id")
                     tipo = task.get("type", "transbank")
                     logger.info("Local worker procesando tx=%s tipo=%s", tx_id, tipo)
+                    
                     if tipo == "transbank":
                         amount = task.get("amount")
                         result = self.pos.do_sale_with_timeout(amount, timeout=MAX_TRANSACTION_TIME)
+                    
                     elif tipo == "mercadopago":
                         terminal_id = task.get("id_terminal") or ID_TERMINAL
                         access_token = task.get("access_token")
+
                         amount = task.get("amount")
                         result = process_mercadopago(terminal_id, access_token, amount)
                     else:
