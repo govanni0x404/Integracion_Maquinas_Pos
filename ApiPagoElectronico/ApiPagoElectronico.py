@@ -3,6 +3,8 @@ import sys
 import time        
 import uuid        
 import json        
+import base64
+import hmac
 import gc          
 import queue       
 import socket      
@@ -54,6 +56,9 @@ if getattr(sys, "stderr", None):  # Si stderr existe
 load_dotenv()
 
 # CONFIGURACIÓN GLOBAL
+API_AUTH_USER = os.environ.get("API_AUTH_USER", "")
+API_AUTH_PASS = os.environ.get("API_AUTH_PASS", "")
+
 APP_NAME = os.environ.get("APP_NAME", "POS Gateway")
 
 LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
@@ -74,6 +79,54 @@ TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120"))
 
 ALLOWED_MP = set([x.strip() for x in os.environ.get("ALLOWED_MP", "").split(",") if x.strip()])
 MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders")
+
+#VALIDACION DE BASIC AUTH EN PETICION
+
+def _unauthorized():
+    """Respuesta 401 con encabezado WWW-Authenticate para que clientes pidan credenciales."""
+    from flask import Response
+    return Response(
+        "Unauthorized", 
+        401,
+        {"WWW-Authenticate": 'Basic realm="POS Gateway"'}
+    )
+
+def check_basic_auth_header(auth_header: str) -> bool:
+    """Devuelve True si Authorization header es Basic y usuario/clave coinciden."""
+    if not auth_header:
+        return False
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "basic":
+        return False
+    try:
+        decoded = base64.b64decode(parts[1]).decode("utf-8", errors="ignore")
+        # decoded => "user:pass"
+        if ":" not in decoded:
+            return False
+        user, pwd = decoded.split(":", 1)
+        # compara en modo constante (seguro frente a timing attacks)
+        return hmac.compare_digest(user, API_AUTH_USER) and hmac.compare_digest(pwd, API_AUTH_PASS)
+    except Exception:
+        return False
+
+def require_basic_auth(fn):
+    """Decorador Flask: rechaza con 401 si no viene Authorization Basic correcta."""
+    from functools import wraps
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        from flask import request
+        # Si no hay credenciales definidas en .env, puedes decidir permitir o rechazar:
+        if not API_AUTH_USER or not API_AUTH_PASS:
+            # Si quieres exigir siempre: cambiar a `return _unauthorized()`
+            logger.warning("API_AUTH_USER/API_AUTH_PASS no definidos; rechazando petición por seguridad.")
+            return _unauthorized()
+
+        auth = request.headers.get("Authorization")
+        if not check_basic_auth_header(auth):
+            logger.warning("[AUTH] Petición rechazada por credenciales inválidas. Header presente: %s", bool(auth))
+            return _unauthorized()
+        return fn(*args, **kwargs)
+    return wrapper
 
 # CONFIGURACIÓN DE LOGGING
 # Handler que rota el archivo cuando llega a 10MB, mantiene 5 backups
@@ -702,6 +755,7 @@ class APIServer:
         # POST /pago
         # Endpoint principal para procesar pagos
         @self.app.route("/pago", methods=["POST"])
+        @require_basic_auth
         def http_pago():
             """
             Procesa un pago (Transbank o Mercado Pago).
@@ -921,42 +975,24 @@ class APIServer:
 # ICONO EN BANDEJA DEL SISTEMA
 # Muestra un icono en el system tray con menú
 class TrayIcon:
-    """
-    Clase que maneja el icono en la bandeja del sistema.
-    Muestra un menú con opciones:
-    - Ver log
-    - Reiniciar POS
-    - Salir
-    """
     
     def __init__(self, pos_module):
-        """
-        Inicializa el icono.
-        pos_module: Referencia al módulo POS para poder reiniciarlo
-        """
         self.icon = None
         self.pos_module = pos_module
 
     def create_image(self):
-        """
-        Crea la imagen del icono.
-        Retorna un objeto Image de PIL.
-        """
         size = (64, 64)
-        img = Image.new("RGBA", size, (33, 150, 243, 255))
+        img = Image.new("RGBA", size, (255, 255, 255, 255))
         dc = ImageDraw.Draw(img)
-        dc.rectangle([10, 10, 54, 54], fill=(255, 255, 255, 255))
-        
         try:
-            fnt = ImageFont.load_default()
-            dc.text((18, 22), "POS", font=fnt, fill=(33, 150, 243, 255))
-        except Exception:
-            dc.text((18, 22), "POS", fill=(33, 150, 243, 255))
-        
+            font = ImageFont.truetype("arial.ttf", 28)
+        except:
+            font = None
+        dc.text((10, 15), "T", fill=(128, 0, 128, 255), font=font)   # morado
+        dc.text((35, 15), "M", fill=(255, 215, 0, 255), font=font)   # amarillo
         return img
 
     def on_quit(self, icon, item):
-        """Handler cuando el usuario hace click en "Salir" """
         logger.info("Tray -> salir solicitado")
         try:
             cleanup_lock()
@@ -964,14 +1000,12 @@ class TrayIcon:
             os._exit(0)
 
     def on_open_log(self, icon, item):
-        """Handler cuando el usuario hace click en "Ver Log" """
         try:
             os.startfile(LOG_FILE) 
         except Exception as e:
             logger.error("No se pudo abrir log: %s", e)
 
     def on_restart_pos(self, icon, item):
-        """Handler cuando el usuario hace click en "Reiniciar POS" """
         try:
             logger.info("Tray -> Reiniciar POS manualmente")
             new_port = self.pos_module.restart() 
