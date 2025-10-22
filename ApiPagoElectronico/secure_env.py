@@ -121,35 +121,62 @@ class SecureEnvHandler:
             print(f"❌ Error cargando env cifrado: {e}")
             return False
 
-
 def load_secure_env():
     """
-    Reemplaza load_dotenv() con esta función en tu código principal.
+    Carga configuración desde .env.encrypted (funciona en .exe y .py)
     """
-    # Intenta cargar .env.encrypted primero
-    if Path(".env.encrypted").exists():
+    import sys
+    
+    # Detecta si estamos en un .exe empaquetado
+    if getattr(sys, 'frozen', False):
+        # Estamos en un .exe de PyInstaller
+        # sys._MEIPASS es la carpeta temporal donde PyInstaller descomprime archivos
+        base_path = Path(sys._MEIPASS)
+        print(f"🔧 Ejecutando desde .exe (carpeta temporal: {base_path})")
+    else:
+        # Estamos ejecutando el script .py normal
+        base_path = Path(__file__).parent
+        print(f"🔧 Ejecutando desde script .py (carpeta: {base_path})")
+    
+    # Busca .env.encrypted
+    encrypted_path = base_path / ".env.encrypted"
+    
+    print(f"🔍 Buscando: {encrypted_path}")
+    print(f"   ¿Existe? {encrypted_path.exists()}")
+    
+    if encrypted_path.exists():
         if not CRYPTO_AVAILABLE:
             print("❌ cryptography no instalado, no se puede usar .env.encrypted")
             return False
         
         handler = SecureEnvHandler(key_source="machine")
-        if handler.load_encrypted_env(".env.encrypted"):
-            return True
+        if handler.load_encrypted_env(str(encrypted_path)):
+            print("✅ Configuración cargada exitosamente")
+            # Verifica que se cargaron las credenciales
+            if os.environ.get("API_AUTH_USER") and os.environ.get("API_AUTH_PASS"):
+                print(f"   Usuario: {os.environ.get('API_AUTH_USER')}")
+                return True
+            else:
+                print("⚠️  Variables no se cargaron correctamente")
+                return False
+        else:
+            print("❌ Error al cargar .env.encrypted")
+            return False
     
-    # Fallback: intenta .env sin cifrar (para desarrollo)
-    if Path(".env").exists():
+    # Fallback: intenta .env sin cifrar
+    env_path = base_path / ".env"
+    if env_path.exists():
         try:
             from dotenv import load_dotenv
-            load_dotenv()
+            load_dotenv(dotenv_path=str(env_path))
             print("⚠️  Cargando .env SIN CIFRAR (modo desarrollo)")
             return True
         except ImportError:
-            print("❌ python-dotenv no instalado: pip install python-dotenv")
+            print("❌ python-dotenv no instalado")
             return False
     
     print("❌ No se encontró .env ni .env.encrypted")
     return False
-
 
 def edit_encrypted_env():
     """Descifra .env.encrypted, permite editarlo y vuelve a cifrar"""
@@ -238,3 +265,4 @@ if __name__ == "__main__":
 
 # Para encriptar: python secure_env.py encrypt
 # Para editar: python secure_env.py edit
+# Para descifrar: python secure_env.py decrypt
