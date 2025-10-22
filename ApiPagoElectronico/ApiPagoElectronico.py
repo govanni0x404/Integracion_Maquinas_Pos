@@ -545,9 +545,13 @@ class APIServer:
         self.local_worker_thread = None
         self._stop_local_worker = threading.Event()
 
+        self.cleanup_thread = None
+        self._stop_cleanup = threading.Event()
+
         self.setup_routes() 
         self.register_local_agent() 
         self.start_local_worker() 
+        self.start_cleanup_task()  # ← AGREGAR ESTA LÍNEA
 
     def ensure_queue(self, id_sucursal, nombre_caja):
         """
@@ -604,58 +608,71 @@ class APIServer:
         logger.info("Agente local registrado %s/%s", ID_SUCURSAL, NOMBRE_CAJA)
 
     def start_local_worker(self):
-        """
-        Inicia un hilo worker que procesa la cola LOCAL.
-        Este worker saca tareas de la cola y las ejecuta (Transbank o MP).
-        """
+        """Worker que procesa la cola LOCAL"""
         self._stop_local_worker.clear()
-        
+    
         def worker():
-            """Función del hilo worker"""
             logger.info("Local worker iniciado (procesa la cola local)...")
-            
             q = self.ensure_queue(ID_SUCURSAL, NOMBRE_CAJA)
-            
+        
             while not self._stop_local_worker.is_set():
                 try:
                     task = q.get(timeout=1)
                 except queue.Empty:
                     continue
-                
+            
                 try:
                     tx_id = task.get("tx_id")
                     tipo = task.get("type", "transbank")
+                
+                    # ACTUALIZA ESTADO A "PROCESANDO"
+                    with self.tasks_lock:
+                        if tx_id in self.tasks:
+                            self.tasks[tx_id]["estado"] = "PROCESANDO"
+                
                     logger.info("Local worker procesando tx=%s tipo=%s", tx_id, tipo)
-                    
+                
                     if tipo == "transbank":
                         amount = task.get("amount")
                         result = self.pos.do_sale_with_timeout(amount, timeout=MAX_TRANSACTION_TIME)
-                    
+                
                     elif tipo == "mercadopago":
                         terminal_id = task.get("id_terminal") or ID_TERMINAL
                         access_token = task.get("access_token")
                         amount = task.get("amount")
                         result = process_mercadopago(terminal_id, access_token, amount)
-                    
+                
                     else:
                         result = {"status": "error", "message": "Tipo no soportado"}
-                    
+                
+                    # GUARDA RESULTADO Y ACTUALIZA ESTADO
                     with self.tasks_lock:
                         entry = self.tasks.get(tx_id)
                         if entry:
-                            entry["result"] = result 
+                            entry["result"] = result
+                        
+                            # Determina el estado final
+                            if result.get("status") == "success":
+                                entry["estado"] = "APROBADO"
+                            elif result.get("status") == "error":
+                                entry["estado"] = "ERROR"
+                            elif result.get("status") == "timeout":
+                                entry["estado"] = "TIMEOUT"
+                            else:
+                                entry["estado"] = "RECHAZADO"
+                        
                             entry["event"].set()
-                    
+                
                     # Libera la caja
                     with self.busy_lock:
                         self.busy_boxes.discard((task.get("id_sucursal"), task.get("nombre_caja")))
-                    
-                    logger.info("Local worker finalizó tx=%s res=%s", tx_id, result)
-                    
+                
+                    logger.info("Local worker finalizó tx=%s estado=%s", 
+                            tx_id, entry.get("estado") if entry else "?")
+                
                 except Exception as e:
                     logger.error("Error en local worker: %s\n%s", e, traceback.format_exc())
-        
-        # Inicia el hilo worker
+    
         self.local_worker_thread = threading.Thread(target=worker, daemon=True)
         self.local_worker_thread.start()
 
@@ -667,6 +684,45 @@ class APIServer:
                 self.local_worker_thread.join(timeout=1) 
         except:
             pass
+    
+    # ====== AGREGAR ESTE MÉTODO AQUÍ ======
+    def start_cleanup_task(self):
+        """Limpia automáticamente transacciones antiguas cada 5 minutos"""
+        self._stop_cleanup.clear()  # ← AGREGAR
+    
+        def cleanup():
+            while not self._stop_cleanup.is_set():  # ← MODIFICAR
+                time.sleep(300)  # 5 minutos
+                try:
+                    now = time.time()
+                    max_age = 600  # 10 minutos
+                
+                    with self.tasks_lock:
+                        old_txs = [
+                            tx_id for tx_id, task in self.tasks.items()
+                            if now - task["timestamp"] > max_age
+                        ]
+                        for tx_id in old_txs:
+                            self.tasks.pop(tx_id, None)
+                
+                    if old_txs:
+                        logger.info("Limpieza automática: %d transacciones eliminadas", len(old_txs))
+                except Exception as e:
+                    logger.error("Error en cleanup task: %s", e)
+    
+        self.cleanup_thread = threading.Thread(target=cleanup, daemon=True)  # ← MODIFICAR
+        self.cleanup_thread.start()  # ← MODIFICAR
+        logger.info("Tarea de limpieza automática iniciada")
+
+    def stop_cleanup_task(self):
+        """Detiene la tarea de limpieza"""
+        self._stop_cleanup.set()
+        try:
+            if self.cleanup_thread:
+                self.cleanup_thread.join(timeout=1)
+        except:
+            pass
+        logger.info("Tarea de limpieza detenida")
 
     # RUTAS HTTP (ENDPOINTS)
     def setup_routes(self):
@@ -955,6 +1011,205 @@ class APIServer:
                     for box, q in boxes.items():
                         info[f"{cid}:{box}"] = {"queued": q.qsize()}
             return jsonify(info)
+        
+        # NUEVA RUTA: Iniciar pago sin esperar
+        @self.app.route("/pago/iniciar", methods=["POST"])
+        @require_basic_auth
+        def http_pago_iniciar():
+            """
+            Inicia un pago y retorna inmediatamente con un transaction_id.
+            El cliente debe usar /pago/estado para consultar el resultado.
+            """
+            data = request.get_json(force=True, silent=True) or {}
+            id_sucursal = data.get("id_sucursal")
+            nombre_caja = data.get("nombre_caja")
+            pos_type = data.get("type")
+        
+            logger.info("[HTTP /pago/iniciar] Petición recibida: %s", json.dumps(data, ensure_ascii=False))
+        
+            if id_sucursal is not None:
+                id_sucursal = str(id_sucursal)
+            if nombre_caja is not None:
+                nombre_caja = str(nombre_caja)
+        
+            if not id_sucursal or not nombre_caja or not pos_type:
+                return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
+
+            # Verifica si la caja está ocupada
+            key = (id_sucursal, nombre_caja)
+            with self.busy_lock:
+                if key in self.busy_boxes:
+                    logger.warning("Caja ocupada: %s/%s", id_sucursal, nombre_caja)
+                    return jsonify({"status": "busy", "message": "Caja ocupada"}), 429
+                self.busy_boxes.add(key)
+
+            tx_id = str(uuid.uuid4())
+        
+            # SOLO TRANSBANK POR AHORA (puedes extender a MP después)
+            if pos_type == "transbank":
+                amount = data.get("amount")
+                id_terminal = data.get("id_terminal", ID_TERMINAL)
+            
+                if amount is None:
+                    with self.busy_lock:
+                        self.busy_boxes.discard(key)
+                    return jsonify({"error": "amount requerido"}), 400
+            
+                # Crea la tarea en estado PENDIENTE
+                with self.tasks_lock:
+                    self.tasks[tx_id] = {
+                        "event": threading.Event(),
+                        "result": None,
+                        "estado": "PENDIENTE",  # NUEVO: estado de la transacción
+                        "id_sucursal": id_sucursal,
+                        "nombre_caja": nombre_caja,
+                        "timestamp": time.time(),
+                        "type": pos_type,
+                        "amount": amount
+                }
+            
+                # Encola la tarea
+                task_payload = {
+                    "tx_id": tx_id,
+                    "id_sucursal": id_sucursal,
+                    "nombre_caja": nombre_caja,
+                    "type": "transbank",
+                    "id_terminal": id_terminal,
+                    "amount": amount
+            }
+            
+                q = self.ensure_queue(id_sucursal, nombre_caja)
+                q.put(task_payload)
+            
+                logger.info("Pago iniciado tx=%s -> %s/%s (respuesta inmediata)", 
+                       tx_id, id_sucursal, nombre_caja)
+            
+                # RESPONDE INMEDIATAMENTE
+                return jsonify({
+                    "status": "ok",
+                    "transaction_id": tx_id,
+                    "estado": "PENDIENTE",
+                    "message": "Pago iniciado. Use /pago/estado/{tx_id} para consultar resultado"
+                }), 202  # 202 Accepted
+        
+            else:
+                with self.busy_lock:
+                    self.busy_boxes.discard(key)
+                return jsonify({"error": "Tipo POS no soportado"}), 400
+
+        # NUEVA RUTA: Consultar estado de un pago
+        @self.app.route("/pago/estado/<tx_id>", methods=["GET"])
+        @require_basic_auth
+        def http_pago_estado(tx_id):
+            """
+            Consulta el estado de una transacción.
+            Retorna: PENDIENTE, APROBADO, RECHAZADO, ERROR, TIMEOUT
+            """
+            with self.tasks_lock:
+                task = self.tasks.get(tx_id)
+            
+                if not task:
+                    return jsonify({
+                        "error": "Transacción no encontrada",
+                        "transaction_id": tx_id
+                }), 404
+            
+                # Si aún está pendiente
+                if task.get("estado") == "PENDIENTE" and task["result"] is None:
+                    return jsonify({
+                        "transaction_id": tx_id,
+                        "estado": "PENDIENTE",
+                        "tiempo_transcurrido": int(time.time() - task["timestamp"])
+                    }), 200
+            
+                # Si ya terminó
+                result = task.get("result")
+                if result:
+                    estado = "APROBADO" if result.get("status") == "success" else "RECHAZADO"
+                    if result.get("status") == "error":
+                        estado = "ERROR"
+                
+                # Actualiza el estado en la tarea
+                task["estado"] = estado
+                
+                return jsonify({
+                    "transaction_id": tx_id,
+                    "estado": estado,
+                    "result": result,
+                    "tiempo_total": int(time.time() - task["timestamp"])
+                }), 200
+            
+            # Estado desconocido
+            return jsonify({
+                "transaction_id": tx_id,
+                "estado": "DESCONOCIDO"
+            }), 200
+
+        # NUEVA RUTA: Cancelar un pago pendiente
+        @self.app.route("/pago/cancelar/<tx_id>", methods=["POST"])
+        @require_basic_auth
+        def http_pago_cancelar(tx_id):
+            """
+            Intenta cancelar un pago pendiente.
+            NOTA: En Transbank no se puede cancelar una vez iniciado,
+            pero esto libera la caja y marca la transacción como cancelada.
+            """
+            with self.tasks_lock:
+                task = self.tasks.get(tx_id)
+            
+                if not task:
+                    return jsonify({"error": "Transacción no encontrada"}), 404
+            
+                if task.get("result") is not None:
+                    return jsonify({
+                        "error": "La transacción ya finalizó",
+                        "estado": task.get("estado")
+                    }), 400
+            
+                # Marca como cancelada
+                task["result"] = {"status": "cancelled", "message": "Cancelado por usuario"}
+                task["estado"] = "CANCELADO"
+                task["event"].set()
+            
+                # Libera la caja
+                id_sucursal = task.get("id_sucursal")
+                nombre_caja = task.get("nombre_caja")
+                self.internal_free_box(id_sucursal, nombre_caja, "cancelacion")
+            
+                logger.info("Transacción cancelada: %s", tx_id)
+            
+                return jsonify({
+                    "status": "ok",
+                    "transaction_id": tx_id,
+                    "estado": "CANCELADO"
+                }), 200
+
+        # NUEVA RUTA: Limpiar transacciones antiguas
+        @self.app.route("/pago/limpiar", methods=["POST"])
+        @require_basic_auth
+        def http_pago_limpiar():
+            """
+            Limpia transacciones antiguas (más de 10 minutos).
+            Útil para liberar memoria.
+            """
+            now = time.time()
+            max_age = 600  # 10 minutos
+        
+            with self.tasks_lock:
+                old_txs = [
+                    tx_id for tx_id, task in self.tasks.items()
+                    if now - task["timestamp"] > max_age
+                ]
+            
+                for tx_id in old_txs:
+                    self.tasks.pop(tx_id, None)
+        
+            logger.info("Limpiadas %d transacciones antiguas", len(old_txs))
+        
+            return jsonify({
+                "status": "ok",
+                "eliminadas": len(old_txs)
+            }), 200
 
     def internal_free_box(self, id_sucursal, nombre_caja, reason=""):
         """
@@ -1091,6 +1346,7 @@ def main():
     finally:
         # Limpieza al salir
         server.stop_local_worker()  # Detiene el worker local
+        server.stop_cleanup_task()
         pos_module.stop_monitor()  # Detiene el monitor del POS
         cleanup_lock()  # Elimina el archivo de lock
         logger.info("Aplicación finalizada")
