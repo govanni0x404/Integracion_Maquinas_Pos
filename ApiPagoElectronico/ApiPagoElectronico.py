@@ -15,7 +15,9 @@ import requests
 from pathlib import Path                      
 from logging.handlers import RotatingFileHandler 
 from datetime import datetime                   
-from dotenv import load_dotenv                   
+from dotenv import load_dotenv
+
+from ApiPagoElectronico.config_seguro import load_secure_env                   
 
 # IMPORTACIONES OPCIONALES
 try:
@@ -53,7 +55,8 @@ if getattr(sys, "stderr", None):  # Si stderr existe
         pass 
 
 
-load_dotenv()
+#load_dotenv()
+load_secure_env()
 
 # CONFIGURACIÓN GLOBAL
 API_AUTH_USER = os.environ.get("API_AUTH_USER", "")
