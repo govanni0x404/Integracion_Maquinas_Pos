@@ -17,7 +17,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime                   
 from dotenv import load_dotenv
 
-from ApiPagoElectronico.config_seguro import load_secure_env                   
+from ApiPagoElectronico.secure_env import load_secure_env                   
 
 # IMPORTACIONES OPCIONALES
 try:
