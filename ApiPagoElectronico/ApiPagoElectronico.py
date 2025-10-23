@@ -11,6 +11,7 @@ import socket
 import logging     
 import traceback   
 import threading   
+from flask.cli import load_dotenv
 import requests    
 import psutil
 from pathlib import Path                      
@@ -55,8 +56,8 @@ if getattr(sys, "stderr", None):  # Si stderr existe
         pass 
 
 
-#load_dotenv()
-load_secure_env()
+load_dotenv()
+#load_secure_env()
 
 # CONFIGURACIÓN GLOBAL
 API_AUTH_USER = os.environ.get("API_AUTH_USER", "")
@@ -68,7 +69,7 @@ LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
 
 LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
 
-HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5000")))
+HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5001")))
 
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
 NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
@@ -316,7 +317,7 @@ class POSModule:
         
         return None
     
-    def get_current_port_safely(self):
+    def get_current_port(self):
         """Obtiene el puerto de forma thread-safe"""
         with self.lock:
             return self.current_port
