@@ -17,7 +17,6 @@ import psutil
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from secure_env import load_secure_env
 from functools import lru_cache
 
 # IMPORTACIONES OPCIONALES
