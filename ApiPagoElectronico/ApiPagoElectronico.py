@@ -900,6 +900,7 @@ class APIServer:
             if custom_timeout:
                 try:
                     timeout = int(custom_timeout)
+                    #timeout = max(5, min(timeout, 300))  # Entre 5s y 5min
                     timeout = max(30, min(timeout, 300))  # Entre 30s y 5min
                     logger.info("Timeout personalizado: %s segundos", timeout)
                 except (ValueError, TypeError):
