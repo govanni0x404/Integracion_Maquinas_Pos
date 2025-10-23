@@ -12,11 +12,12 @@ import logging
 import traceback   
 import threading   
 import requests    
+import psutil
 from pathlib import Path                      
 from logging.handlers import RotatingFileHandler 
-from datetime import datetime                   
-from dotenv import load_dotenv
+from datetime import datetime
 from secure_env import load_secure_env
+from functools import lru_cache
 
 # IMPORTACIONES OPCIONALES
 try:
@@ -95,18 +96,16 @@ def _unauthorized():
 
 def check_basic_auth_header(auth_header: str) -> bool:
     """Devuelve True si Authorization header es Basic y usuario/clave coinciden."""
-    if not auth_header:
-        return False
-    parts = auth_header.split()
-    if len(parts) != 2 or parts[0].lower() != "basic":
+    if not auth_header or not auth_header.startswith("Basic "):
         return False
     try:
-        decoded = base64.b64decode(parts[1]).decode("utf-8", errors="ignore")
-        # decoded => "user:pass"
+        encoded = auth_header[6:]
+        decoded = base64.b64decode(encoded).decode("utf-8", errors="ignore")
+        
         if ":" not in decoded:
             return False
+        
         user, pwd = decoded.split(":", 1)
-        # compara en modo constante (seguro frente a timing attacks)
         return hmac.compare_digest(user, API_AUTH_USER) and hmac.compare_digest(pwd, API_AUTH_PASS)
     except Exception:
         return False
@@ -131,16 +130,21 @@ def require_basic_auth(fn):
     return wrapper
 
 # CONFIGURACIÓN DE LOGGING
-# Handler que rota el archivo cuando llega a 10MB, mantiene 5 backups
-handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
-
-logging.basicConfig(
-    level=logging.INFO, 
-    format="%(asctime)s [%(levelname)s] %(message)s", 
-    handlers=[handler, logging.StreamHandler()]
-)
-
+# Configura solo una vez
 logger = logging.getLogger(APP_NAME)
+logger.setLevel(logging.INFO)
+
+# Handler de archivo
+file_handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+
+# Handler de consola (solo si no es --noconsole)
+if getattr(sys, "stdout", None):
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(console_handler)
+
+logger.addHandler(file_handler)
 
 # INSTANCIA ÚNICA
 def ensure_single_instance():
@@ -150,22 +154,29 @@ def ensure_single_instance():
     Retorna True si puede correr, False si ya hay otra instancia.
     """
     lock_path = Path(LOCK_FILE)  # Ruta del archivo de lock
+    current_pid = os.getpid()
     
     if lock_path.exists():
         try:
             with open(lock_path, "r") as f:
-                pid = int(f.read().strip())
-            try:
-                os.kill(pid, 0)
-                logger.error("Otra instancia detectada (PID=%s).", pid)
-                return False 
-            except OSError:
-                lock_path.unlink()
+                old_pid = int(f.read().strip())
+            if psutil.pid_exists(old_pid):
+                try:
+                    proc = psutil.Process(old_pid)
+                    if "ApiPagoElectronico" in proc.name() or "python" in proc.name():
+                        logger.error("Otra instancia detectada (PID=%s)", old_pid)
+                        return False
+                except psutil.NoSuchProcess:
+                    pass
+            lock_path.unlink()  # Elimina lock si proceso no existe
         except Exception:
-            try:
-                lock_path.unlink()
-            except Exception:
-                pass
+            lock_path.unlink(missing_ok=True)
+        
+    with open(lock_path, "w") as f:
+        f.write(str(current_pid))
+    
+    logger.info("Lock file creado: %s", lock_path)
+    return True
     
     # Crea el archivo de lock con el PID actual
     try:
@@ -304,12 +315,9 @@ class POSModule:
             self.current_port = None
         
         return None
-
-    def get_current_port(self):
-        """
-        Obtiene el puerto actualmente en caché (thread-safe).
-        Retorna el puerto o None.
-        """
+    
+    def get_current_port_safely(self):
+        """Obtiene el puerto de forma thread-safe"""
         with self.lock:
             return self.current_port
 
@@ -364,12 +372,14 @@ class POSModule:
         if not port:
             return {"status": "error", "message": "No se detectó POS conectado"}
         
-        result = {}
+        result_queue = queue.Queue(maxsize=1)
         
         def worker():
-            """Worker que ejecuta la venta en un hilo separado"""
-            nonlocal result
-            result = self.open_port_and_sale(port, amount)
+            try:
+                res = self.open_port_and_sale(port, amount)
+                result_queue.put(res)
+            except Exception as e:
+                result_queue.put({"status": "error", "message": str(e)})
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
@@ -377,9 +387,12 @@ class POSModule:
         t.join(timeout=timeout)
         
         if t.is_alive():
-            logger.error("Timeout en venta POS (thread sigue vivo).")
+            logger.error("Timeout en venta POS")
             return {"status": "error", "message": "Timeout en venta POS"}
-        return result 
+        try:
+            return result_queue.get_nowait()
+        except queue.Empty:
+            return {"status": "error", "message": "No se obtuvo respuesta"}
 
     def start_monitor(self, interval=5):
         """
@@ -700,15 +713,15 @@ class APIServer:
                     max_age = 600  # 10 minutos
                 
                     with self.tasks_lock:
-                        old_txs = [
+                        to_delete = [
                             tx_id for tx_id, task in self.tasks.items()
-                            if now - task["timestamp"] > max_age
+                            if now - task.get("timestamp", now) > max_age
                         ]
-                        for tx_id in old_txs:
+                        for tx_id in to_delete:
                             self.tasks.pop(tx_id, None)
                 
-                    if old_txs:
-                        logger.info("Limpieza automática: %d transacciones eliminadas", len(old_txs))
+                    if to_delete:
+                        logger.info("Limpieza automática: %d transacciones eliminadas", len(to_delete))
                 except Exception as e:
                     logger.error("Error en cleanup task: %s", e)
     
