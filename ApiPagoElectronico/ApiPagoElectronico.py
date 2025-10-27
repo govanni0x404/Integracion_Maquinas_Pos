@@ -54,7 +54,6 @@ if getattr(sys, "stderr", None):  # Si stderr existe
     except Exception:
         pass
 
-
 load_dotenv()
 # load_secure_env()
 
@@ -297,6 +296,12 @@ class POSModule:
 
         self.last_ok = 0
 
+        self._is_online = False
+
+    def is_online(self):
+        with self.lock:
+            return self._is_online
+
     def list_ports(self):
         """
         Lista todos los puertos COM disponibles en el sistema.
@@ -340,6 +345,12 @@ class POSModule:
 
                     with self.lock:
                         self.current_port = p
+                        self._is_online = True
+
+                    # Y cuando no lo detecta:
+                    with self.lock:
+                        self.current_port = None
+                        self._is_online = False 
 
                     self.last_ok = time.time()
 
@@ -1048,7 +1059,21 @@ class APIServer:
                 "agents_count": agents_count,
                 "current_port": self.pos.get_current_port()
             })
+        
+        #Validacion si el servicio (ejecutable) esta funcionando o no
+        @self.app.route("/online", methods=["POST", "GET"])
+        @require_basic_auth
+        def http_online():
 
+            pos_online = self.pos.is_online()
+    
+            return jsonify({
+                "success": True,
+                "online": pos_online,
+                "puerto": self.pos.get_current_port(),
+                "message": "POS conectado" if pos_online else "POS no detectado"
+            }), 200 if pos_online else 503
+ 
         # GET /debug/queues
         # Endpoint de debug para ver estado de las colas
         @self.app.route("/debug/queues")
