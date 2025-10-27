@@ -58,7 +58,7 @@ if getattr(sys, "stderr", None):  # Si stderr existe
 load_dotenv()
 # load_secure_env()
 
-# CONFIGURACIÓN GLOBAL
+# CONFIGURACIÓN GLOBAL (En caso de fallar el archivo .env)
 API_AUTH_USER = os.environ.get("API_AUTH_USER", "")
 API_AUTH_PASS = os.environ.get("API_AUTH_PASS", "")
 
@@ -68,7 +68,7 @@ LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
 
 LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
 
-HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5001")))
+HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5005")))
 
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
 NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
@@ -76,7 +76,7 @@ ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get(
     "TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
 
 USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "true").lower() == "true"
-PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM7,COM6,COM8")
+PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM5,COM6,COM7,COM8")
 
 MAX_TRANSACTION_TIME = int(os.environ.get("MAX_TRANSACTION_TIME", "90"))
 TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120"))
@@ -87,8 +87,6 @@ MP_API_URL = os.environ.get(
     "MP_API_URL", "https://api.mercadopago.com/v1/orders")
 
 # VALIDACION DE BASIC AUTH EN PETICION
-
-
 def _unauthorized():
     """Respuesta 401 con encabezado WWW-Authenticate para que clientes pidan credenciales."""
     from flask import Response
@@ -123,9 +121,7 @@ def require_basic_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         from flask import request
-        # Si no hay credenciales definidas en .env, puedes decidir permitir o rechazar:
         if not API_AUTH_USER or not API_AUTH_PASS:
-            # Si quieres exigir siempre: cambiar a `return _unauthorized()`
             logger.warning(
                 "API_AUTH_USER/API_AUTH_PASS no definidos; rechazando petición por seguridad.")
             return _unauthorized()
@@ -140,7 +136,6 @@ def require_basic_auth(fn):
 
 
 # CONFIGURACIÓN DE LOGGING
-# Configura solo una vez
 logger = logging.getLogger(APP_NAME)
 logger.setLevel(logging.INFO)
 
@@ -160,8 +155,6 @@ if getattr(sys, "stdout", None):
 logger.addHandler(file_handler)
 
 # INSTANCIA ÚNICA
-
-
 def ensure_single_instance():
     """
     Verifica si ya hay otra instancia corriendo.
@@ -218,39 +211,65 @@ def cleanup_lock():
 
 # APERTURA DE PUERTO EN FIREWALL (Windows)
 # Intenta abrir el puerto automáticamente
-
-
 def open_firewall_port(port):
     """
     Intenta abrir el puerto en Windows Firewall usando netsh.
-    Requiere permisos de administrador para funcionar.
+    Crea reglas inbound y outbound específicas para el puerto.
+    Limpia duplicados si existen.
     """
     try:
         import subprocess
         rule_name = f"{APP_NAME}_Port_{port}"
-
-        check_cmd = f'netsh advfirewall firewall show rule name="{rule_name}"'
-        result = subprocess.run(check_cmd, shell=True,
-                                capture_output=True, text=True)
-
-        if "No rules match" in result.stdout:
-            add_cmd = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport={port}'
-            res = subprocess.run(add_cmd, shell=True,
-                                 capture_output=True, text=True)
-
-            if res.returncode == 0:
-                logger.info("Puerto %s abierto en firewall", port)
-            else:
-                logger.warning(
-                    "No se pudo abrir puerto en firewall (admin required): %s", res.stderr)
+        
+        # Función helper para ejecutar netsh y loggear
+        def run_netsh(cmd):
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            logger.debug("Netsh cmd: %s | Return: %s | Stdout: %s | Stderr: %s", cmd, res.returncode, res.stdout.strip()[:100], res.stderr.strip()[:100])
+            return res
+        
+        # Chequea si regla inbound existe
+        check_in_cmd = f'netsh advfirewall firewall show rule name="{rule_name}_Inbound"'
+        result_in = run_netsh(check_in_cmd)
+        
+        # Si existe, borra para evitar duplicados
+        if "No rules match" not in result_in.stdout:
+            delete_in_cmd = f'netsh advfirewall firewall delete rule name="{rule_name}_Inbound"'
+            run_netsh(delete_in_cmd)
+            logger.info("Regla inbound duplicada eliminada para puerto %s", port)
+        
+        # Añade regla inbound (entrada) específica
+        add_in_cmd = f'netsh advfirewall firewall add rule name="{rule_name}_Inbound" dir=in action=allow protocol=TCP localport={port} remoteport=any profile=any'
+        res_in = run_netsh(add_in_cmd)
+        
+        if res_in.returncode == 0:
+            logger.info("Regla inbound creada para puerto %s (TCP, local={port})", port)
         else:
-            logger.info("Puerto %s ya presente en firewall", port)
+            logger.warning("Error creando inbound para %s: %s", port, res_in.stderr)
+        
+        # Chequea si regla outbound existe
+        check_out_cmd = f'netsh advfirewall firewall show rule name="{rule_name}_Outbound"'
+        result_out = run_netsh(check_out_cmd)
+        
+        # Si existe, borra para evitar duplicados
+        if "No rules match" not in result_out.stdout:
+            delete_out_cmd = f'netsh advfirewall firewall delete rule name="{rule_name}_Outbound"'
+            run_netsh(delete_out_cmd)
+            logger.info("Regla outbound duplicada eliminada para puerto %s", port)
+        
+        # Añade regla outbound (salida) específica
+        add_out_cmd = f'netsh advfirewall firewall add rule name="{rule_name}_Outbound" dir=out action=allow protocol=TCP localport={port} remoteport=any profile=any'
+        res_out = run_netsh(add_out_cmd)
+        
+        if res_out.returncode == 0:
+            logger.info("Regla outbound creada para puerto %s (TCP, local={port})", port)
+        else:
+            logger.warning("Error creando outbound para %s: %s", port, res_out.stderr)
+            
     except Exception as e:
-        logger.warning("open_firewall_port error: %s", e)
+        logger.error("Error en open_firewall_port: %s\n%s", e, traceback.format_exc())
+
 
 # MÓDULO POS (TRANSBANK)
-
-
 class POSModule:
     """
     Clase que maneja el POS físico Transbank:
@@ -329,7 +348,6 @@ class POSModule:
             except Exception as e:
                 logger.debug("Puerto %s no usable: %s", p, e)
             finally:
-                # Siempre intenta cerrar el puerto
                 try:
                     if pos:
                         pos.close_port()
@@ -338,7 +356,6 @@ class POSModule:
 
         logger.warning("No se detectó POS en los puertos listados")
 
-        # Limpia el caché
         with self.lock:
             self.current_port = None
 
@@ -352,8 +369,6 @@ class POSModule:
     def open_port_and_sale(self, port, amount):
         """
         Abre el puerto especificado y ejecuta una venta.
-        port: Puerto COM (ej: "COM7")
-        amount: Monto de la venta
         Retorna un dict con el resultado de la venta.
         """
         if not TRANSBANK_AVAILABLE:
@@ -392,8 +407,6 @@ class POSModule:
     def do_sale_with_timeout(self, amount, timeout=MAX_TRANSACTION_TIME):
         """
         Ejecuta una venta con timeout para evitar bloqueos infinitos.
-        amount: Monto de la venta
-        timeout: Tiempo máximo de espera en segundos
         Retorna el resultado de la venta o error de timeout.
         """
         port = self.get_current_port() or self.detect_port()
@@ -426,7 +439,6 @@ class POSModule:
     def start_monitor(self, interval=5):
         """
         Inicia un hilo monitor que verifica constantemente el POS.
-        interval: Intervalo de verificación en segundos
         """
         if not USAR_POS_FISICO or not TRANSBANK_AVAILABLE:
             logger.info(
@@ -481,7 +493,6 @@ class POSModule:
 
     def restart(self):
         """
-        Reinicia el módulo POS: limpia el caché y redetecta.
         Útil para cuando el POS se desconecta y reconecta.
         """
         logger.info("Reiniciando POS module (clear port + redetect)...")
@@ -490,14 +501,9 @@ class POSModule:
         return self.detect_port()
 
 # MERCADO PAGO
-
-
 def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVER):
     """
     Procesa un pago con Mercado Pago Point.
-    terminal_id: ID del terminal de Mercado Pago
-    access_token: Token de acceso de la cuenta
-    amount: Monto del pago
     Retorna un dict con el resultado.
     """
     logger.info("Procesando MercadoPago terminal=%s monto=%s",terminal_id, amount, timeout)
@@ -570,7 +576,6 @@ class APIServer:
     def __init__(self, pos_module):
         """
         Inicializa el servidor.
-        pos_module: Instancia de POSModule para procesar pagos Transbank
         """
         if not FLASK_AVAILABLE:
             logger.critical(
@@ -602,7 +607,7 @@ class APIServer:
         self.setup_routes()
         self.register_local_agent()
         self.start_local_worker()
-        self.start_cleanup_task()  # ← AGREGAR ESTA LÍNEA
+        self.start_cleanup_task()
 
     def ensure_queue(self, id_sucursal, nombre_caja):
         """
@@ -619,9 +624,6 @@ class APIServer:
     def register_agent(self, id_sucursal, nombre_caja, info=None):
         """
         Registra un agente (caja) en el sistema.
-        id_sucursal: ID de la sucursal
-        nombre_caja: Nombre de la caja
-        info: Información adicional (metadata)
         """
         with self.agents_lock:
             self.agents.setdefault(id_sucursal, {})[nombre_caja] = {
@@ -679,7 +681,7 @@ class APIServer:
                     tipo = task.get("type", "transbank")
                     custom_timeout = task.get("timeout", MAX_TRANSACTION_TIME)
 
-                    logger.info("📋 Procesando: tx=%s, tipo=%s, timeout=%s",
+                    logger.info("Procesando: tx=%s, tipo=%s, timeout=%s",
                                 tx_id, tipo, custom_timeout)
 
                     # ACTUALIZA ESTADO A "PROCESANDO"
@@ -698,7 +700,7 @@ class APIServer:
                         result = self.pos.do_sale_with_timeout(
                             amount, timeout=custom_timeout)
 
-                        logger.info("📊 Resultado: %s", result.get("status"))
+                        logger.info(" Resultado: %s", result.get("status"))
 
                     elif tipo == "mercadopago":
                         terminal_id = task.get("id_terminal") or ID_TERMINAL
@@ -747,7 +749,7 @@ class APIServer:
                         pass
         self.local_worker_thread = threading.Thread(target=worker, daemon=True)
         self.local_worker_thread.start()
-        logger.info("✅ Local worker thread iniciado")
+        logger.info("Local worker thread iniciado")
 
     def start_cleanup_task(self):
         """Limpia automáticamente transacciones antiguas cada 5 minutos"""
@@ -899,8 +901,8 @@ class APIServer:
             if custom_timeout:
                 try:
                     timeout = int(custom_timeout)
-                    #timeout = max(5, min(timeout, 300))  # Entre 5s y 5min
-                    timeout = max(30, min(timeout, 300))  # Entre 30s y 5min
+                    #timeout = max(5, min(timeout, 300))
+                    timeout = max(30, min(timeout, 300))
                     logger.info("Timeout personalizado: %s segundos", timeout)
                 except (ValueError, TypeError):
                     logger.warning("Timeout inválido, usando default: %s", timeout)
@@ -941,7 +943,7 @@ class APIServer:
                         "id_sucursal": id_sucursal,
                         "nombre_caja": nombre_caja,
                         "timestamp": time.time(),
-                        "timeout": timeout  # ← IMPORTANTE: Se guarda aquí
+                        "timeout": timeout
                     }
 
                 # Crea el payload
@@ -952,28 +954,27 @@ class APIServer:
                     "type": "transbank",
                     "id_terminal": id_terminal,
                     "amount": amount,
-                    "timeout": timeout  # ← IMPORTANTE: Se envía al worker
+                    "timeout": timeout
                 }
 
                 # Encola
                 q = self.ensure_queue(id_sucursal, nombre_caja)
                 q.put(task_payload)
-                logger.info("✅ Tarea encolada: tx=%s, timeout=%s, local=%s",
+                logger.info("Tarea encolada: tx=%s, timeout=%s, local=%s",
                             tx_id, timeout, is_local)
 
-                # ✅ ESPERA CON EL TIMEOUT CORRECTO
+                # ESPERA CON EL TIMEOUT CORRECTO
                 start_wait = time.time()
-                logger.info("⏳ Esperando resultado (timeout=%s)...", timeout)
-                # ← USA EL TIMEOUT PERSONALIZADO
+                logger.info("Esperando resultado (timeout=%s)...", timeout)
                 finished = event.wait(timeout=timeout)
                 wait_time = time.time() - start_wait
 
                 if finished:
-                    logger.info("⏱️ Espera OK: tx=%s, duración=%.2fs", tx_id, wait_time)
+                    logger.info("Espera OK: tx=%s, duración=%.2fs", tx_id, wait_time)
                 else:
-                    logger.warning("⏱️ Espera TIMEOUT: tx=%s, duración=%.2fs", tx_id, wait_time)
+                    logger.warning("Espera TIMEOUT: tx=%s, duración=%.2fs", tx_id, wait_time)
 
-                logger.info("⏱️  Espera finalizada: tx=%s, duración=%.2fs, finished=%s",
+                logger.info("Espera finalizada: tx=%s, duración=%.2fs, finished=%s",
                             tx_id, wait_time, finished)
 
                 # Si timeout
@@ -982,7 +983,7 @@ class APIServer:
                         self.tasks.pop(tx_id, None)
                     self.internal_free_box(id_sucursal, nombre_caja, "timeout")
                     logger.error(
-                        "❌ TIMEOUT tx=%s después de %.2fs", tx_id, wait_time)
+                        " TIMEOUT tx=%s después de %.2fs", tx_id, wait_time)
                     return jsonify({
                         "status": "timeout",
                         "transaction_id": tx_id,
@@ -999,7 +1000,7 @@ class APIServer:
                 with self.busy_lock:
                     self.busy_boxes.discard(key)
 
-                logger.info("✅ Respuesta: tx=%s, estado=%s, tiempo=%.2fs",
+                logger.info("Respuesta: tx=%s, estado=%s, tiempo=%.2fs",
                             tx_id, final_estado, wait_time)
 
                 return jsonify({
@@ -1045,7 +1046,7 @@ class APIServer:
                 "id_terminal": ID_TERMINAL,
                 "usa_pos_fisico": USAR_POS_FISICO,
                 "agents_count": agents_count,
-                "current_port": self.pos.get_current_port()  # Puerto COM actual
+                "current_port": self.pos.get_current_port()
             })
 
         # GET /debug/queues
@@ -1116,7 +1117,7 @@ class APIServer:
                     self.tasks[tx_id] = {
                         "event": threading.Event(),
                         "result": None,
-                        "estado": "PENDIENTE",  # NUEVO: estado de la transacción
+                        "estado": "PENDIENTE",
                         "id_sucursal": id_sucursal,
                         "nombre_caja": nombre_caja,
                         "timestamp": time.time(),
@@ -1149,7 +1150,7 @@ class APIServer:
                     "estado": "PENDIENTE",
                     "timeout_configurado": custom_timeout,
                     "message": "Pago iniciado. Use /pago/estado/{tx_id} para consultar resultado"
-                }), 202  # 202 Accepted
+                }), 202
 
             else:
                 with self.busy_lock:
@@ -1162,7 +1163,6 @@ class APIServer:
         def http_pago_estado(tx_id):
             """
             Consulta el estado de una transacción.
-            Retorna: PENDIENTE, APROBADO, RECHAZADO, ERROR, TIMEOUT
             """
             with self.tasks_lock:
                 task = self.tasks.get(tx_id)
@@ -1211,8 +1211,6 @@ class APIServer:
         def http_pago_cancelar(tx_id):
             """
             Intenta cancelar un pago pendiente.
-            NOTA: En Transbank no se puede cancelar una vez iniciado,
-            pero esto libera la caja y marca la transacción como cancelada.
             """
             with self.tasks_lock:
                 task = self.tasks.get(tx_id)
@@ -1227,8 +1225,7 @@ class APIServer:
                     }), 400
 
                 # Marca como cancelada
-                task["result"] = {"status": "cancelled",
-                                  "message": "Cancelado por usuario"}
+                task["result"] = {"status": "cancelled","message": "Cancelado por usuario"}
                 task["estado"] = "CANCELADO"
                 task["event"].set()
 
@@ -1249,10 +1246,6 @@ class APIServer:
         @self.app.route("/pago/limpiar", methods=["POST"])
         @require_basic_auth
         def http_pago_limpiar():
-            """
-            Limpia transacciones antiguas (más de 10 minutos).
-            Útil para liberar memoria.
-            """
             now = time.time()
             max_age = 600  # 10 minutos
 
@@ -1273,10 +1266,6 @@ class APIServer:
             }), 200
 
     def internal_free_box(self, id_sucursal, nombre_caja, reason=""):
-        """
-        Libera una caja ocupada.
-        Se usa internamente cuando hay timeout o errores.
-        """
         key = (id_sucursal, nombre_caja)
         with self.busy_lock:
             if key in self.busy_boxes:
@@ -1292,8 +1281,6 @@ class APIServer:
 
 # ICONO EN BANDEJA DEL SISTEMA
 # Muestra un icono en el system tray con menú
-
-
 class TrayIcon:
 
     def __init__(self, pos_module):
@@ -1361,11 +1348,7 @@ class TrayIcon:
             logger.error("Tray icon error: %s", e)
 
 # FUNCIÓN PRINCIPAL
-
-
 def main():
-    """Función principal que inicia toda la aplicación"""
-
     # Banner de inicio
     print("=" * 60)
     print("POS PAYMENT GATEWAY - TODO EN UNO")
@@ -1413,13 +1396,12 @@ def main():
         logger.error("Error fatal: %s\n%s", e, traceback.format_exc())
     finally:
         # Limpieza al salir
-        server.stop_local_worker()  # Detiene el worker local
+        server.stop_local_worker()
         server.stop_cleanup_task()
-        pos_module.stop_monitor()  # Detiene el monitor del POS
-        cleanup_lock()  # Elimina el archivo de lock
+        pos_module.stop_monitor()
+        cleanup_lock()
         logger.info("Aplicación finalizada")
-
 
 # PUNTO DE ENTRADA
 if __name__ == "__main__":
-    main()  # Ejecuta la función principal
+    main()
