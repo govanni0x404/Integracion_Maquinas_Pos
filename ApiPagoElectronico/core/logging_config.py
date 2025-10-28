@@ -1,27 +1,41 @@
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+import sys
 import os
-from datetime import datetime
 
-LOG_DIR = "logs"
-LOG_FILE = os.path.join(LOG_DIR, f"gateway_{datetime.now().strftime('%Y%m%d')}.log")
-
-os.makedirs(LOG_DIR, exist_ok=True)
+APP_NAME = "POS Gateway"
 
 def setup_logger():
-    logger = logging.getLogger()
+    logger = logging.getLogger(APP_NAME)
     logger.setLevel(logging.DEBUG)
 
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    # Ruta para logs
+    if getattr(sys, "frozen", False):
+        # Ejecutable .exe
+        base_path = Path(sys._MEIPASS)  # carpeta temporal de PyInstaller
+        log_dir = Path(os.environ.get("APPDATA", ".")) / APP_NAME
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "pos_gateway.log"
+    else:
+        # Código fuente
+        log_file = Path(__file__).parent.parent / "pos_gateway.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Evitar duplicar handlers si se llama varias veces
-    if not logger.handlers:
-        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
+    # Formato de logs
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
+    )
 
-        ch = logging.StreamHandler()
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
+    # Rotating file handler
+    fh = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+    # Console handler
+    ch = logging.StreamHandler()
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
     logger.info("Logger inicializado")
     return logger

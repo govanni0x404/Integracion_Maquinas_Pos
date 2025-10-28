@@ -20,7 +20,7 @@ class TrayIcon:
     def create_image(self):
         size = (64, 64)
         try:
-            img = Image.new("RGBA", size, (255, 255, 255, 0))
+            img = Image.new("RGBA", size, (255, 255, 255, 255))
             dc = ImageDraw.Draw(img)
             try:
                 font = ImageFont.truetype("arial.ttf", 28)
