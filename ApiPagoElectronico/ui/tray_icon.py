@@ -1,4 +1,3 @@
-# ui/tray_icon.py
 import os
 import logging
 import threading

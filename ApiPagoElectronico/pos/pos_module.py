@@ -1,16 +1,22 @@
-# pos/pos_module.py
 import time
 import threading
 import queue
 import gc
 import logging
+import traceback
+import serial
+import serial.tools.list_ports
 from pathlib import Path
 from config.settings import PUERTOS_COM, USAR_POS_FISICO, MAX_TRANSACTION_TIME
 
 logger = logging.getLogger()
 
-# Si tienes el SDK de transbank disponible, el código real irá en los TODOs.
-# IMPORTANTE: pega aquí tus funciones originales donde marqué TODO.
+try:
+    import serial.tools.list_ports
+    from transbank import POSIntegrado
+    TRANSBANK_AVAILABLE = True
+except Exception:
+    TRANSBANK_AVAILABLE = False
 
 class POSModule:
     """
@@ -35,27 +41,15 @@ class POSModule:
             return self._is_online
 
     def list_ports(self):
-        """
-        Lista todos los puertos COM disponibles en el sistema.
-        Si tienes `serial.tools.list_ports` en tu código original, reemplaza aquí.
-        """
+        """Lista los puertos COM disponibles."""
         try:
-            # TODO: si usas pyserial, reemplaza esta implementación con:
-            # ports = [p.device for p in serial.tools.list_ports.comports()]
-            # return ports
-            import serial.tools.list_ports as _lps  # type: ignore
-            ports = [p.device for p in _lps.comports()]
+            ports = [p.device for p in serial.tools.list_ports.comports()]
             return ports
         except Exception:
-            # fallback vacío si no está instalado
             return []
 
     def detect_port(self):
-        """
-        Detecta en qué puerto COM está conectado el POS.
-        Intenta primero los puertos preferidos, luego el resto.
-        Retorna el puerto detectado o None si no encuentra.
-        """
+        """Detecta en qué puerto COM está conectado el POS."""
         if not USAR_POS_FISICO:
             logger.debug("POS físico deshabilitado por configuración")
             return None
@@ -68,28 +62,26 @@ class POSModule:
         for p in ordered:
             pos = None
             try:
-                # TODO: Aquí va la lógica real del SDK Transbank (crear POSIntegrado, open_port, poll)
-                # EJEMPLO (pegá tu código real):
-                # pos = POSIntegrado()
-                # if pos.open_port(p) and pos.poll():
-                #     pos.close_port()
-                #     with self.lock:
-                #         self.current_port = p
-                #         self._is_online = True
-                #
-                #     self.last_ok = time.time()
-                #     return p
+                pos = POSIntegrado()
 
-                # Placeholder (intenta abrir/chequear)
-                # Si quieres simular, considera que el primer puerto preferido funciona:
-                logger.debug("Probando puerto (simulado): %s", p)
-                # Simulación: no marcar online aquí; espera que pegues tu lógica real
+                if pos.open_port(p) and pos.poll():
+                    try:
+                        pos.close_port()
+                    except Exception:
+                        pass
+
+                    logger.info("POS detectado en %s", p)
+                    with self.lock:
+                        self.current_port = p
+                        self._is_online = True
+
+                    self.last_ok = time.time()
+                    return p
             except Exception as e:
                 logger.debug("Puerto %s no usable: %s", p, e)
             finally:
                 try:
                     if pos:
-                        # si pegaste pos, intenta cerrar
                         pos.close_port()
                 except Exception:
                     pass
@@ -105,29 +97,40 @@ class POSModule:
             return self.current_port
 
     def open_port_and_sale(self, port, amount):
-        """
-        Abre el puerto especificado y ejecuta una venta.
-        Retorna un dict con el resultado de la venta.
-        TODO: Pega aquí tu implementación original de `open_port_and_sale` / `do_sale`.
-        """
-        # Si tienes el SDK Transbank disponible, copia aquí tu lógica original:
-        # try:
-        #     pos = POSIntegrado()
-        #     if not pos.open_port(port):
-        #         return {"status": "error", "message": f"No se pudo abrir {port}"}
-        #     ticket = time.strftime("%H%M%S")
-        #     res = pos.sale(amount, ticket)
-        #     ...
-        # finally:
-        #     pos.close_port()
-        #
-        return {"status": "error", "message": "Transbank SDK no integrado - pega tu lógica en pos_module.open_port_and_sale"}
+        if not TRANSBANK_AVAILABLE:
+            return {"status": "error", "message": "Transbank SDK no disponible"}
+
+        pos = None
+        try:
+            pos = POSIntegrado()
+            if not pos.open_port(port):
+                return {"status": "error", "message": f"No se pudo abrir {port}"}
+
+            ticket = time.strftime("%H%M%S")
+            logger.info("Venta POS -> puerto=%s monto=%s ticket=%s", port, amount, ticket)
+
+            res = pos.sale(amount, ticket)
+            logger.info("Respuesta POS: %s", res)
+
+            if res.get("response_code") in ("0", "00"):
+                self.last_ok = time.time()
+                return {"status": "success", "response": res}
+            else:
+                return {"status": "failed", "response": res}
+
+        except Exception as e:
+            logger.error("Error do_sale: %s\n%s", e, traceback.format_exc())
+            return {"status": "error", "message": str(e)}
+        finally:
+            try:
+                if pos:
+                    pos.close_port()
+            except Exception:
+                pass
+            gc.collect()
 
     def do_sale_with_timeout(self, amount, timeout=MAX_TRANSACTION_TIME):
-        """
-        Ejecuta una venta con timeout para evitar bloqueos infinitos.
-        Retorna el resultado de la venta o error de timeout.
-        """
+        """Ejecuta una venta con timeout para evitar bloqueos infinitos."""
         port = self.get_current_port() or self.detect_port()
 
         if not port:
@@ -149,15 +152,14 @@ class POSModule:
         if t.is_alive():
             logger.error("Timeout en venta POS")
             return {"status": "error", "message": "Timeout en venta POS"}
+
         try:
             return result_queue.get_nowait()
         except queue.Empty:
             return {"status": "error", "message": "No se obtuvo respuesta"}
 
     def start_monitor(self, interval=5):
-        """
-        Inicia un hilo monitor que verifica constantemente el POS.
-        """
+        """Inicia un hilo monitor que verifica constantemente el POS."""
         if not USAR_POS_FISICO:
             logger.info("Monitor POS no iniciado (USAR_POS_FISICO=false)")
             return
@@ -175,15 +177,18 @@ class POSModule:
                     else:
                         p = self.get_current_port()
                         try:
-                            # TODO: si pegaste la lógica de POSIntegrado, aquí debería verificarse
-                            # pos = POSIntegrado()
-                            # ok = pos.open_port(p) and pos.poll()
-                            # pos.close_port()
-                            # if not ok: limpiar puerto...
-                            pass
+                            pos = POSIntegrado()
+                            ok = pos.open_port(p) and pos.poll()
+                            pos.close_port()
+
+                            if not ok:
+                                logger.warning("POS en %s dejó de responder, limpiando puerto.", p)
+                                with self.lock:
+                                    self.current_port = None
                         except Exception:
                             with self.lock:
                                 self.current_port = None
+
                     time.sleep(interval)
                 except Exception as e:
                     logger.debug("Monitor POS error: %s", e)
@@ -203,9 +208,7 @@ class POSModule:
         logger.info("Monitor POS detenido")
 
     def restart(self):
-        """
-        Útil para cuando el POS se desconecta y reconecta.
-        """
+        """Reinicia el módulo del POS."""
         logger.info("Reiniciando POS module (clear port + redetect)...")
         with self.lock:
             self.current_port = None

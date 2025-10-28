@@ -1,4 +1,3 @@
-# app.py
 from core.logging_config import setup_logging
 from core.singleton import ensure_single_instance, cleanup_lock
 from core.firewall import open_firewall_port
@@ -23,7 +22,7 @@ def main():
         print("Ya hay otra instancia corriendo. Saliendo.")
         return
 
-    # Intenta abrir puerto en firewall (no fatal)
+    # Intenta abrir puerto en firewall
     try:
         open_firewall_port(HTTP_PORT)
     except Exception:

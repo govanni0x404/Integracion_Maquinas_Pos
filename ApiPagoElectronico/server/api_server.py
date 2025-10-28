@@ -1,4 +1,3 @@
-# server/api_server.py
 import time
 import uuid
 import json

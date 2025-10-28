@@ -1,4 +1,3 @@
-# server/auth.py
 import base64
 import hmac
 from functools import wraps

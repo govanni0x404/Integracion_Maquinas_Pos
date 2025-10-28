@@ -37,22 +37,22 @@ MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders
 # Feature detection helpers (runtime)
 def is_flask_available() -> bool:
     try:
-        import flask  # noqa
+        import flask
         return True
     except Exception:
         return False
 
 def is_transbank_available() -> bool:
     try:
-        import transbank  # noqa
+        import transbank
         return True
     except Exception:
         return False
 
 def is_systray_available() -> bool:
     try:
-        import pystray  # noqa
-        import PIL  # noqa
+        import pystray
+        import PIL
         return True
     except Exception:
         return False
