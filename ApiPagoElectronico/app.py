@@ -17,9 +17,13 @@ def main():
 
     # Firewall
     try:
+        logger.info(f"Verificando reglas de firewall para el puerto {HTTP_PORT}...")
         open_firewall_port(HTTP_PORT)
-    except Exception:
-        logger.exception("Error abriendo puerto en firewall")
+        logger.info(f"Reglas de firewall listas para el puerto {HTTP_PORT}")
+    except PermissionError:
+        logger.warning("No se tienen permisos de administrador para modificar el firewall.")
+    except Exception as e:
+        logger.exception("Error al abrir puerto en firewall: %s", e)
 
     # Módulo POS
     pos_module = POSModule(PUERTOS_COM)
