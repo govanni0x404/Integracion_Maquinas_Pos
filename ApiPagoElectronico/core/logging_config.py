@@ -1,25 +1,27 @@
 import logging
-from logging.handlers import RotatingFileHandler
-import sys
-from config.settings import LOG_FILE, APP_NAME
+import os
+from datetime import datetime
 
-def setup_logging():
-    logger = logging.getLogger(APP_NAME)
-    logger.setLevel(logging.INFO)
+LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, f"gateway_{datetime.now().strftime('%Y%m%d')}.log")
 
-    # Formatter
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+os.makedirs(LOG_DIR, exist_ok=True)
 
-    # Console handler (stdout)
-    if getattr(sys, "stdout", None):
-        ch = logging.StreamHandler(sys.stdout)
+def setup_logger():
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    # Evitar duplicar handlers si se llama varias veces
+    if not logger.handlers:
+        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+
+        ch = logging.StreamHandler()
         ch.setFormatter(formatter)
         logger.addHandler(ch)
-
-    # Rotating file handler
-    fh = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8")
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
 
     logger.info("Logger inicializado")
     return logger
