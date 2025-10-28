@@ -49,6 +49,8 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
         resp = requests.post(MP_API_URL, json=payload, headers=headers, timeout=15)
         data_resp = resp.json()
 
+        logger.info("Respuesta inicial MercadoPago (%s): %s", resp.status_code, json.dumps(data_resp, ensure_ascii=False))
+
         if resp.status_code != 201:
             logger.warning("Error creando orden MP: %s %s", resp.status_code, data_resp)
             return {"status": "failed", "http_status": resp.status_code, "response": data_resp}
@@ -62,11 +64,14 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
             order_info = check.json()
             status = order_info.get("status")
 
+            logger.info("Estado actual orden MP %s: %s -> %s", order_id, check.status_code, json.dumps(order_info, ensure_ascii=False))
+
             if status in ("created", "in_process", "at_terminal"):
                 time.sleep(3)
                 continue
 
             logger.info("Orden %s finalizada con estado: %s", order_id, status)
+            logger.info("Respuesta final MercadoPago: %s", json.dumps(order_info, ensure_ascii=False))
             return {"status": status, "order_id": order_id, "response": order_info}
 
         logger.warning("Timeout esperando respuesta MP orden %s", order_id)
