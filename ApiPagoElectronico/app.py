@@ -1,56 +1,48 @@
-from core.logging_config import setup_logger
+import threading
+from core.logging_config import logger
 from core.singleton import ensure_single_instance, cleanup_lock
 from core.firewall import open_firewall_port
 from pos.pos_module import POSModule
 from server.api_server import APIServer
 from ui.tray_icon import TrayIcon
-from config.settings import APP_NAME, USAR_POS_FISICO, PUERTOS_COM, HTTP_PORT
-
-import threading
-import logging
-
-# Configura el logger principal
-logger = setup_logger()
-logger.info("Iniciando aplicación...")
+from config.settings import PUERTOS_COM, HTTP_PORT, USAR_POS_FISICO
 
 def main():
-    # Verifica instancia única
+    logger.info("Iniciando aplicación...")
+
+    # Singleton lock
     if not ensure_single_instance():
-        print("Ya hay otra instancia corriendo. Saliendo.")
+        logger.info("Ya hay otra instancia corriendo. Saliendo.")
         return
 
-    # Intenta abrir puerto en firewall
+    # Firewall
     try:
         open_firewall_port(HTTP_PORT)
-    except Exception as e:
-        logger.exception("Error al abrir puerto en firewall: %s", e)
+    except Exception:
+        logger.exception("Error abriendo puerto en firewall")
 
-    # Crea el módulo POS
+    # Módulo POS
     pos_module = POSModule(PUERTOS_COM)
-
-    # Inicia monitor POS
     pos_module.start_monitor()
 
-    # Crea servidor API
+    # Servidor API
     server = APIServer(pos_module)
 
-    # Inicia icono de bandeja en hilo aparte
+    # Icono bandeja
     try:
         tray = TrayIcon(pos_module)
         t = threading.Thread(target=tray.run, daemon=True)
         t.start()
-    except Exception as e:
-        logger.exception("No se pudo iniciar tray icon: %s", e)
+    except Exception:
+        logger.exception("No se pudo iniciar tray icon")
 
     try:
-        # Corre el servidor Flask
         server.run()
     except KeyboardInterrupt:
         logger.info("Interrupción por teclado")
-    except Exception as e:
-        logger.exception("Error fatal en server.run(): %s", e)
+    except Exception:
+        logger.exception("Error fatal en server.run()")
     finally:
-        # Limpieza al salir
         try:
             server.stop_local_worker()
             server.stop_cleanup_task()
@@ -59,7 +51,6 @@ def main():
         pos_module.stop_monitor()
         cleanup_lock()
         logger.info("Aplicación finalizada")
-
 
 if __name__ == "__main__":
     main()
