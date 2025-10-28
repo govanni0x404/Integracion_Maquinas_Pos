@@ -7,9 +7,9 @@ import traceback
 import serial
 import serial.tools.list_ports
 from pathlib import Path
-from config.settings import PUERTOS_COM, USAR_POS_FISICO, MAX_TRANSACTION_TIME
+from config.settings import APP_NAME,PUERTOS_COM, USAR_POS_FISICO, MAX_TRANSACTION_TIME
 
-logger = logging.getLogger()
+logger = logging.getLogger(APP_NAME)
 
 try:
     import serial.tools.list_ports

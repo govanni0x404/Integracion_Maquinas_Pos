@@ -10,14 +10,11 @@ import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from config.settings import (
-    ID_SUCURSAL, NOMBRE_CAJA, ID_TERMINAL, ALLOWED_MP,
-    MP_API_URL, TIMEOUT_SERVER, MAX_TRANSACTION_TIME, HTTP_PORT
-)
+from config.settings import (APP_NAME,ID_SUCURSAL, NOMBRE_CAJA, ID_TERMINAL, ALLOWED_MP,MP_API_URL, TIMEOUT_SERVER, MAX_TRANSACTION_TIME, HTTP_PORT)
 from server.auth import require_basic_auth
 from pos.pos_module import POSModule
 
-logger = logging.getLogger()
+logger = logging.getLogger(APP_NAME)
 
 def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVER):
     """
