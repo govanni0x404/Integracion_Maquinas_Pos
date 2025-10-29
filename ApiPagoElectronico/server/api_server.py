@@ -472,13 +472,36 @@ class APIServer:
         @app.route("/online", methods=["POST", "GET"])
         @require_basic_auth
         def http_online():
-            pos_online = self.pos.is_online() if self.pos else False
-            return jsonify({
-                "success": True,
-                "online": pos_online,
-                "puerto": self.pos.get_current_port() if self.pos else None,
-                "message": "POS conectado" if pos_online else "POS no detectado"
-            }), 200 if pos_online else 503
+            try:
+                if not self.pos:
+                    return jsonify({
+                        "success": True,
+                        "online": False,
+                        "puerto": None,
+                        "message": "POS no inicializado"
+                    }), 503
+
+                pos_online = False
+                try:
+                    pos_online = self.pos.is_online()
+                except Exception as e:
+                    logger.warning("Error al verificar estado del POS: %s", e)
+                    pos_online = False
+
+                return jsonify({
+                    "success": True,
+                    "online": pos_online,
+                    "puerto": self.pos.get_current_port(),
+                    "message": "POS conectado" if pos_online else "POS no detectado"
+                }), 200 if pos_online else 503
+
+            except Exception as e:
+                logger.error("Error en /online: %s", e)
+                return jsonify({
+                    "success": False,
+                    "online": False,
+                    "message": f"Error verificando POS: {e}"
+            }), 500
 
         @app.route("/debug/queues")
         def debug_queues():

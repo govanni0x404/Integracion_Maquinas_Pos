@@ -1,9 +1,9 @@
-# ui/tray_icon.py
 import os
 import logging
 import threading
 import platform
 
+from win10toast import ToastNotifier
 from config.settings import APP_NAME
 
 logger = logging.getLogger(APP_NAME)
@@ -42,18 +42,20 @@ class TrayIcon:
             return None
 
     def notificacion_inicio(self):
-        """Muestra notificación (plyer)."""
+        """Muestra notificación (win10toast)."""
         try:
-            if platform.system() == "Windows" or platform.system() == "Linux" or platform.system() == "Darwin":
-                # plyer notificará en sistema adecuado (en exe requiere incluir plyer/platforms)
-                notification.notify(
-                    title="Servicio Iniciado",
-                    message=f"{APP_NAME} se está ejecutando en segundo plano",
-                    timeout=5
+            if platform.system() == "Windows":
+                toaster = ToastNotifier()
+                toaster.show_toast(
+                    "Servicio Iniciado",
+                    f"{APP_NAME} se está ejecutando en segundo plano",
+                    duration=5,
+                    threaded=True,
+                    icon_path=None
                 )
-                logger.info("Notificación de inicio mostrada")
+                logger.info("Notificación de inicio mostrada (win10toast)")
             else:
-                logger.info("Notificación: %s - %s", "Servicio Iniciado", APP_NAME)
+                logger.info("Notificación (no-Windows): Servicio Iniciado - %s", APP_NAME)
         except Exception as e:
             logger.warning("No se pudo mostrar notificación: %s", e)
 
