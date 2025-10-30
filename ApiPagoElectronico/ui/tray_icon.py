@@ -97,35 +97,40 @@ class TrayIcon:
         except Exception:
             pass
 
-    def _run_icon(self):
-        """Función que corre el icon (en hilo)."""
-        if not SYSTRAY_AVAILABLE:
-            logger.info("pystray no disponible")
-            return
+        def _run_icon(self):
+            """Función que corre el icon (en hilo)."""
+            if not SYSTRAY_AVAILABLE:
+                logger.info("pystray no disponible")
+                return
 
-        try:
-            # Mostrar notificación al iniciar
-            self.notificacion_inicio()
+            try:
+                image = self.create_image()
+                menu = (
+                    pystray.MenuItem(APP_NAME, lambda: None, enabled=False),
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem("Ver Log", self.on_open_log),
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem("Salir", self.on_quit),
+                )
 
-            menu = (
-                pystray.MenuItem(APP_NAME, lambda: None, enabled=False),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Ver Log", self.on_open_log),
-                #pystray.MenuItem("Reiniciar POS", self.on_restart_pos),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Salir", self.on_quit),
-            )
+                icon = pystray.Icon(APP_NAME, image, APP_NAME, menu=pystray.Menu(*menu))
+                self.icon = icon  # mantener referencia
 
-            image = self.create_image()
-            icon = pystray.Icon(APP_NAME, image, APP_NAME, menu=pystray.Menu(*menu))
-            self.icon = icon  # mantener referencia en self evita GC
-            logger.info("Iniciando icono de bandeja")
-            icon.run()
-            logger.info("Icono de bandeja terminado")
-        except Exception as e:
-            logger.error("Error en tray _run_icon: %s", e)
+                # Mostrar notificación dentro del hilo
+                self.notificacion_inicio()
+
+                import time
+                time.sleep(0.5)  # pequeño delay para que toast se muestre
+
+                logger.info("Iniciando icono de bandeja")
+                icon.run()
+                logger.info("Icono de bandeja terminado")
+            except Exception as e:
+                logger.error("Error en tray _run_icon: %s", e)
+
 
     def run(self):
+        self.notificacion_inicio()
         """Inicia el icon en un hilo demonio (si no está ya corriendo)."""
         if self._thread and self._thread.is_alive():
             return

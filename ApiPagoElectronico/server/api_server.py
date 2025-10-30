@@ -10,7 +10,7 @@ import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from config.settings import (APP_NAME,ID_SUCURSAL, NOMBRE_CAJA, ID_TERMINAL, ALLOWED_MP,MP_API_URL, TIMEOUT_SERVER, MAX_TRANSACTION_TIME, HTTP_PORT)
+from config.settings import (APP_NAME,ID_SUCURSAL, NOMBRE_CAJA, ID_TERMINAL,MP_API_URL, TIMEOUT_SERVER, MAX_TRANSACTION_TIME, HTTP_PORT)
 from server.auth import require_basic_auth
 from pos.pos_module import POSModule
 
@@ -341,10 +341,17 @@ class APIServer:
         @require_basic_auth
         def http_pago():
             data = request.get_json(force=True, silent=True) or {}
-            id_sucursal = str(data.get("id_sucursal", ""))
-            nombre_caja = str(data.get("nombre_caja", ""))
+            id_sucursal = str(data.get("id_sucursal"))
+            nombre_caja = str(data.get("nombre_caja"))
             pos_type = data.get("type")
             logger.info("[HTTP /pago] Petición: id_sucursal=%s, nombre_caja=%s, type=%s", id_sucursal, nombre_caja, pos_type)
+
+            # Validación contra el .env
+            if id_sucursal != str(ID_SUCURSAL) or nombre_caja != str(NOMBRE_CAJA):
+                return jsonify({
+                    "status": "forbidden",
+                    "message": f"El id_sucursal y el nombre_caja no coinciden con la configuración de esta máquina"
+                }), 403
 
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
@@ -445,9 +452,6 @@ class APIServer:
                 if access_token is None or amount is None:
                     return jsonify({"error": "Faltan campos mercadopago"}), 400
 
-                if ALLOWED_MP and f"{id_sucursal}:{nombre_caja}" not in ALLOWED_MP:
-                    return jsonify({"status": "forbidden", "message": "Caja no autorizada"}), 403
-
                 res = process_mercadopago(terminal_id, access_token, amount, timeout=timeout)
                 return jsonify(res), 200
 
@@ -518,6 +522,14 @@ class APIServer:
             data = request.get_json(force=True, silent=True) or {}
             id_sucursal = data.get("id_sucursal")
             nombre_caja = data.get("nombre_caja")
+
+            # Validación contra el .env
+            if id_sucursal != str(ID_SUCURSAL) or nombre_caja != str(NOMBRE_CAJA):
+                return jsonify({
+                    "status": "forbidden",
+                    "message": f"El id_sucursal y el nombre_caja no coinciden con la configuración de esta máquina"
+                }), 403
+
             pos_type = data.get("type")
 
             logger.info("[HTTP /pago/iniciar] Petición recibida: %s", json.dumps(data, ensure_ascii=False))
