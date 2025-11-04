@@ -11,4 +11,5 @@ requests==2.32.4
 transbank-pos-sdk==1.0.1
 transbank-sdk==6.1.0
 
-# Usar pip install -r requirements.txt para instalar todo
+# Saber que usa y requiere el programa  "pip freeze > requirements.txt"
+# Usar  "pip install -r requirements.txt" para instalar todo
