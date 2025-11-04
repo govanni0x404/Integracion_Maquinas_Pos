@@ -70,7 +70,7 @@ class TrayIcon:
                 app_name=APP_NAME,
                 timeout=5  # segundos
             )
-            logger.info("Notificación de inicio mostrada")
+            logger.info("Notificación Archivo de inicio mostrada")
             
         except Exception as e:
             logger.warning("No se pudo mostrar notificación: %s", e)
