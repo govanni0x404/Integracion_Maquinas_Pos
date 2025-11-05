@@ -477,28 +477,38 @@ class APIServer:
         @require_basic_auth
         def http_online():
             try:
-                if not self.pos:
+                data = request.get_json(force=True, silent=True) or {}
+                tipo = data.get("type")
+                if tipo=="transbank":
+                    if not self.pos:
+                        return jsonify({
+                            "success": True,
+                            "online": False,
+                            "puerto": None,
+                            "message": "POS no inicializado"
+                        }), 503
+
+                    pos_online = False
+                    try:
+                        print("verificando si el pos esta en linea....")
+                        pos_online = self.pos.is_online()
+                        print(pos_online)
+                    except Exception as e:
+                        logger.warning("Error al verificar estado del POS: %s", e)
+                        pos_online = False
+
                     return jsonify({
                         "success": True,
-                        "online": False,
-                        "puerto": None,
-                        "message": "POS no inicializado"
-                    }), 503
-
-                pos_online = False
-                try:
-                    pos_online = self.pos.is_online()
-                except Exception as e:
-                    logger.warning("Error al verificar estado del POS: %s", e)
-                    pos_online = False
-
-                return jsonify({
-                    "success": True,
-                    "online": pos_online,
-                    "puerto": self.pos.get_current_port(),
-                    "message": "POS conectado" if pos_online else "POS no detectado"
-                }), 200 if pos_online else 503
-
+                        "online": pos_online,
+                        "puerto": self.pos.get_current_port(),
+                        "message": "POS conectado" if pos_online else "POS no detectado"
+                    }), 200 if pos_online else 503
+                else:
+                    return jsonify({
+                        "success": True,
+                        "message": "POS conectado"
+                    }), 200
+                    
             except Exception as e:
                 logger.error("Error en /online: %s", e)
                 return jsonify({

@@ -1,6 +1,6 @@
 import threading
 from core.logging_config import logger
-from core.singleton import ensure_single_instance, cleanup_lock
+from core.singleton import ensure_single_instance_interactive, cleanup_lock
 from core.firewall import open_firewall_port
 from pos.pos_module import POSModule
 from server.api_server import APIServer
@@ -10,10 +10,9 @@ from config.settings import PUERTOS_COM, HTTP_PORT, USAR_POS_FISICO
 def main():
     logger.info("Iniciando aplicación...")
 
-    # Singleton lock
-    if not ensure_single_instance():
-        logger.info("Ya hay otra instancia corriendo. Saliendo.")
-        return
+    if not ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=5):
+       logger.info("Saliendo por decision del usuario o error al tomar el lock")        
+       return
 
     # Firewall
     try:
