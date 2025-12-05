@@ -1,39 +1,19 @@
-2025-12-05 16:43:58,397 [INFO] Logger inicializado
-2025-12-05 16:43:58,649 [INFO] Iniciando aplicación...
-2025-12-05 16:43:58,650 [INFO] Lock file creado: pos_gateway.lock (PID=15984)
-2025-12-05 16:43:58,650 [INFO] Verificando reglas de firewall para el puerto 5005...
-2025-12-05 16:43:58,949 [INFO] Regla inbound creada para puerto 5005
-2025-12-05 16:43:59,205 [INFO] Regla outbound creada para puerto 5005
-2025-12-05 16:43:59,206 [INFO] Reglas de firewall listas para el puerto 5005
-2025-12-05 16:43:59,206 [INFO] Monitor POS iniciado
-2025-12-05 16:43:59,226 [INFO] Agente local registrado 70/caja_10
-2025-12-05 16:43:59,228 [INFO] Local worker iniciado
-2025-12-05 16:43:59,228 [INFO] Local worker thread iniciado
-2025-12-05 16:43:59,228 [INFO] Tarea de limpieza automática iniciada
-2025-12-05 16:43:59,229 [INFO] APIServer inicializado
-2025-12-05 16:43:59,229 [INFO] Servidor Flask arrancando en puerto 5005
-2025-12-05 16:43:59,229 [INFO] Thread de icono de bandeja iniciado
-2025-12-05 16:43:59,236 [INFO] Puertos detectados: ['COM1', 'COM5'] | Preferidos: COM5,COM6,COM7,COM8
-2025-12-05 16:43:59,242 [INFO] Notificación Archivo de inicio mostrada
-2025-12-05 16:43:59,248 [INFO] Iniciando icono de bandeja del sistema...
-2025-12-05 16:43:59,442 [INFO] POS detectado en COM5
-2025-12-05 16:44:04,544 [INFO] Solicitud de anulación recibida: operation_id=109
-2025-12-05 16:44:04,545 [ERROR] Error do_refund: could not open port 'COM5': PermissionError(13, 'Acceso denegado.', None, 5)
-Traceback (most recent call last):
-  File "pos\pos_module.py", line 225, in open_port_and_refund
-  File "transbank\utils\serial_manager.py", line 52, in open_port
-  File "serial\serialwin32.py", line 33, in __init__
-  File "serial\serialutil.py", line 244, in __init__
-  File "serial\serialwin32.py", line 64, in open
-serial.serialutil.SerialException: could not open port 'COM5': PermissionError(13, 'Acceso denegado.', None, 5)
-
-2025-12-05 16:44:09,225 [INFO] Solicitud de anulación recibida: operation_id=109
-2025-12-05 16:44:09,226 [INFO] Anulación POS -> puerto=COM5 operation_id=109
-2025-12-05 16:44:14,692 [INFO] Puertos detectados: ['COM1', 'COM5'] | Preferidos: COM5,COM6,COM7,COM8
-2025-12-05 16:44:15,325 [INFO] Respuesta anulación POS: {'function_code': 1210, 'response_code': '21', 'response_message': 'Anulación no Permitida', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'authorization_code': '', 'operation_number': '109'}
-2025-12-05 16:44:18,712 [INFO] Solicitud de anulación recibida: operation_id=109
-2025-12-05 16:44:18,717 [INFO] Puertos detectados: ['COM1', 'COM5'] | Preferidos: COM5,COM6,COM7,COM8
-2025-12-05 16:44:18,923 [INFO] POS detectado en COM5
-2025-12-05 16:44:18,926 [INFO] Anulación POS -> puerto=COM5 operation_id=109
-2025-12-05 16:44:23,436 [INFO] Respuesta anulación POS: {'function_code': 1210, 'response_code': '07', 'response_message': 'Transacción Cancelada desde el POS', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'authorization_code': '', 'operation_number': '109'}
-2025-12-05 16:44:28,660 [INFO] Abriendo log: C:\Proyects\Api_Global\ApiPagoElectronico\dist\pos_gateway.log
+2025-12-05 17:53:24,244 [INFO] Logger inicializado
+2025-12-05 17:53:24,523 [INFO] Iniciando aplicación...
+2025-12-05 17:53:24,524 [INFO] Lock file creado: pos_gateway.lock (PID=5708)
+2025-12-05 17:53:24,524 [INFO] Verificando reglas de firewall para el puerto 5005...
+2025-12-05 17:53:24,907 [INFO] Regla inbound creada para puerto 5005
+2025-12-05 17:53:25,188 [INFO] Regla outbound creada para puerto 5005
+2025-12-05 17:53:25,188 [INFO] Reglas de firewall listas para el puerto 5005
+2025-12-05 17:53:25,188 [INFO] Monitor POS iniciado
+2025-12-05 17:53:25,210 [INFO] Agente local registrado 70/caja_10
+2025-12-05 17:53:25,211 [INFO] Local worker iniciado
+2025-12-05 17:53:25,211 [INFO] Local worker thread iniciado
+2025-12-05 17:53:25,211 [INFO] Tarea de limpieza automática iniciada
+2025-12-05 17:53:25,211 [INFO] APIServer inicializado
+2025-12-05 17:53:25,211 [INFO] Servidor Flask arrancando en puerto 5005
+2025-12-05 17:53:25,212 [INFO] Thread de icono de bandeja iniciado
+2025-12-05 17:53:25,221 [INFO] Puertos detectados: ['COM1', 'COM5'] | Preferidos: COM5,COM6,COM7,COM8
+2025-12-05 17:53:25,228 [INFO] Notificación Archivo de inicio mostrada
+2025-12-05 17:53:25,235 [INFO] Iniciando icono de bandeja del sistema...
+2025-12-05 17:53:25,440 [INFO] POS detectado en COM5

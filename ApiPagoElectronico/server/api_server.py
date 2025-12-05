@@ -377,6 +377,37 @@ class APIServer:
                     "status": "error",
                     "message": str(e)
                 }), 500
+            
+        @app.route('/pago/detalle', methods=['POST', 'GET'])
+        def detalle():
+            try:
+                # Obtener parámetro print_on_pos del body o query string
+                print_on_pos = False
+                
+                if request.method == 'POST':
+                    data = request.get_json(silent=True) or {}
+                    print_on_pos = data.get('print_on_pos', False)
+                else:  # GET
+                    print_on_pos = request.args.get('print_on_pos', 'false').lower() == 'true'
+                
+                logger.info(f"Solicitud de detalle recibida: print_on_pos={print_on_pos}")
+                
+                # Ejecutar consulta de detalle con timeout
+                result = self.pos.do_details_with_timeout(print_on_pos)
+                
+                if result["status"] == "success":
+                    return jsonify(result), 200
+                elif result["status"] == "failed":
+                    return jsonify(result), 400
+                else:
+                    return jsonify(result), 500
+                    
+            except Exception as e:
+                logger.exception("Error en endpoint /pago/detalle")
+                return jsonify({
+                    "status": "error",
+                    "message": str(e)
+                }), 500
 
         @app.route("/pago", methods=["POST"])
         @require_basic_auth

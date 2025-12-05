@@ -2,15 +2,12 @@ from transbank import POSIntegrado
 from transbank.error.transbank_exception import TransbankException
 
 PORT = "COM5"
-BAUDRATE = 115200
 
 try:
-    POS = POSIntegrado()    
-    POS.open_port(PORT, BAUDRATE)
-    print("Puerto abierto correctamente")
+    POS = POSIntegrado()
+    POS.open_port(PORT)
     
-    ultima = POS.last_sale()
-    print("Última venta:", ultima)
+    print(POS.details(False))
 
 except Exception as e:
     print("Error:", e)

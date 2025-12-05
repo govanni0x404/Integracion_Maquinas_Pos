@@ -275,3 +275,65 @@ class POSModule:
             return result_queue.get_nowait()
         except queue.Empty:
             return {"status": "error", "message": "No se obtuvo respuesta"}
+        
+    def open_port_and_details(self, port, print_on_pos=False):
+        if not TRANSBANK_AVAILABLE:
+            return {"status": "error", "message": "Transbank SDK no disponible"}
+
+        pos = None
+        try:
+            pos = POSIntegrado()
+            if not pos.open_port(port):
+                return {"status": "error", "message": f"No se pudo abrir {port}"}
+
+            logger.info("Obteniendo detalle POS -> puerto=%s, print_on_pos=%s", port, print_on_pos)
+
+            res = pos.details(print_on_pos)
+            logger.info("Respuesta detalle POS: %s", res)
+
+            if res.get("response_code") in ("0", "00"):
+                self.last_ok = time.time()
+                return {"status": "success", "response": res}
+            else:
+                return {"status": "failed", "response": res}
+
+        except Exception as e:
+            logger.error("Error do_details: %s\n%s", e, traceback.format_exc())
+            return {"status": "error", "message": str(e)}
+        finally:
+            try:
+                if pos:
+                    pos.close_port()
+            except Exception:
+                pass
+            gc.collect()
+
+
+    def do_details_with_timeout(self, print_on_pos=False, timeout=MAX_TRANSACTION_TIME):
+        """Obtiene el detalle de la última transacción con timeout."""
+        port = self.get_current_port() or self.detect_port()
+
+        if not port:
+            return {"status": "error", "message": "No se detectó POS conectado"}
+
+        result_queue = queue.Queue(maxsize=1)
+
+        def worker():
+            try:
+                res = self.open_port_and_details(port, print_on_pos)
+                result_queue.put(res)
+            except Exception as e:
+                result_queue.put({"status": "error", "message": str(e)})
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            logger.error("Timeout obteniendo detalle POS")
+            return {"status": "error", "message": "Timeout obteniendo detalle POS"}
+
+        try:
+            return result_queue.get_nowait()
+        except queue.Empty:
+            return {"status": "error", "message": "No se obtuvo respuesta"}
