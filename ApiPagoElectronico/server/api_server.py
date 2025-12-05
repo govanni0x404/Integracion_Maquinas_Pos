@@ -336,6 +336,47 @@ class APIServer:
                 pass
 
             return jsonify({"status": "ok"})
+        
+        @app.route('/pago/refund', methods=['POST'])
+        def refund():
+            try:
+                data = request.get_json()
+                
+                if not data or 'operation_id' not in data:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Falta el campo 'operation_id' en el body"
+                    }), 400
+                
+                operation_id = data['operation_id']
+                
+                # Validar que operation_id sea un número
+                try:
+                    operation_id = int(operation_id)
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "status": "error",
+                        "message": "operation_id debe ser un número válido"
+                    }), 400
+                
+                logger.info(f"Solicitud de anulación recibida: operation_id={operation_id}")
+                
+                # Ejecutar anulación con timeout
+                result = self.pos.do_refund_with_timeout(operation_id)
+                
+                if result["status"] == "success":
+                    return jsonify(result), 200
+                elif result["status"] == "failed":
+                    return jsonify(result), 400
+                else:
+                    return jsonify(result), 500
+                    
+            except Exception as e:
+                logger.exception("Error en endpoint /api/refund")
+                return jsonify({
+                    "status": "error",
+                    "message": str(e)
+                }), 500
 
         @app.route("/pago", methods=["POST"])
         @require_basic_auth

@@ -214,3 +214,64 @@ class POSModule:
             self.current_port = None
             self._is_online = False
         return self.detect_port()
+    
+    def open_port_and_refund(self, port, operation_id):
+        if not TRANSBANK_AVAILABLE:
+            return {"status": "error", "message": "Transbank SDK no disponible"}
+
+        pos = None
+        try:
+            pos = POSIntegrado()
+            if not pos.open_port(port):
+                return {"status": "error", "message": f"No se pudo abrir {port}"}
+
+            logger.info("Anulación POS -> puerto=%s operation_id=%s", port, operation_id)
+
+            res = pos.refund(operation_id)
+            logger.info("Respuesta anulación POS: %s", res)
+
+            if res.get("response_code") in ("0", "00"):
+                self.last_ok = time.time()
+                return {"status": "success", "response": res}
+            else:
+                return {"status": "failed", "response": res}
+
+        except Exception as e:
+            logger.error("Error do_refund: %s\n%s", e, traceback.format_exc())
+            return {"status": "error", "message": str(e)}
+        finally:
+            try:
+                if pos:
+                    pos.close_port()
+            except Exception:
+                pass
+            gc.collect()
+
+
+    def do_refund_with_timeout(self, operation_id, timeout=MAX_TRANSACTION_TIME):
+        port = self.get_current_port() or self.detect_port()
+
+        if not port:
+            return {"status": "error", "message": "No se detectó POS conectado"}
+
+        result_queue = queue.Queue(maxsize=1)
+
+        def worker():
+            try:
+                res = self.open_port_and_refund(port, operation_id)
+                result_queue.put(res)
+            except Exception as e:
+                result_queue.put({"status": "error", "message": str(e)})
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            logger.error("Timeout en anulación POS")
+            return {"status": "error", "message": "Timeout en anulación POS"}
+
+        try:
+            return result_queue.get_nowait()
+        except queue.Empty:
+            return {"status": "error", "message": "No se obtuvo respuesta"}
