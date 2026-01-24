@@ -4,8 +4,9 @@ from core.singleton import ensure_single_instance_interactive, cleanup_lock
 from core.firewall import open_firewall_port
 from pos.pos_module import POSModule
 from server.api_server import APIServer
+from pos.getnet_module import GetnetModule
 from ui.tray_icon import TrayIcon
-from config.settings import PUERTOS_COM, HTTP_PORT, USAR_POS_FISICO
+from config.settings import PUERTOS_COM, HTTP_PORT, USAR_POS_FISICO, USAR_GETNET 
 
 def main():
     logger.info("Iniciando aplicación...")
@@ -26,10 +27,21 @@ def main():
 
     # Módulo POS
     pos_module = POSModule(PUERTOS_COM)
-    pos_module.start_monitor()
+    if USAR_POS_FISICO:
+        pos_module.start_monitor()
+
+    #Módulo POS Getnet
+    getnet_module = None
+    if USAR_GETNET:
+        try:
+            getnet_module = GetnetModule()
+            logger.info("Módulo Getnet inicializado")
+        except Exception as e:
+            logger.error(f"Error inicializando Getnet: {e}")
 
     # Servidor API
-    server = APIServer(pos_module)
+    #server = APIServer(pos_module)
+    server = APIServer(pos_module, getnet_module)
 
     # Icono bandeja
     try:

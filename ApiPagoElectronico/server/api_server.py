@@ -91,8 +91,9 @@ class APIServer:
     - Coordina agentes remotos
     """
 
-    def __init__(self, pos_module: POSModule):
+    def __init__(self, pos_module: POSModule, getnet_module=None):
         self.pos = pos_module
+        self.getnet = getnet_module
         self.app = Flask(__name__)
         CORS(self.app)
 
@@ -188,6 +189,13 @@ class APIServer:
                         amount = task.get("amount")
                         result = self.pos.do_sale_with_timeout(amount, timeout=custom_timeout)
                         logger.info("Resultado Transbank: %s", result.get("status") if isinstance(result, dict) else result)
+                    elif tipo == "getnet":
+                        if not self.getnet:
+                            result = {"status": "error", "message": "Getnet no disponible"}
+                        else:
+                            amount = task.get("amount")
+                            result = self.getnet.do_sale_with_timeout(amount, timeout=custom_timeout)
+                            logger.info("Resultado Getnet: %s", result.get("status"))
                     elif tipo == "mercadopago":
                         terminal_id = task.get("id_terminal") or ID_TERMINAL
                         access_token = task.get("access_token")
@@ -442,8 +450,85 @@ class APIServer:
             else:
                 timeout = TIMEOUT_SERVER
 
+            if pos_type == "getnet":
+                if not self.getnet:
+                    return jsonify({
+                        "error": "POS Getnet no habilitado en esta máquina"
+                    }), 503
+                
+                amount = data.get("amount")
+                if amount is None:
+                    return jsonify({"error": "amount requerido"}), 400
+                
+                key = (id_sucursal, nombre_caja)
+                with self.busy_lock:
+                    if key in self.busy_boxes:
+                        logger.warning("Caja ocupada: %s/%s", id_sucursal, nombre_caja)
+                        return jsonify({"status": "busy", "message": "Caja ocupada"}), 429
+                    self.busy_boxes.add(key)
+                
+                tx_id = str(uuid.uuid4())
+                
+                with self.tasks_lock:
+                    event = threading.Event()
+                    self.tasks[tx_id] = {
+                        "event": event,
+                        "result": None,
+                        "estado": "PENDIENTE",
+                        "id_sucursal": id_sucursal,
+                        "nombre_caja": nombre_caja,
+                        "timestamp": time.time(),
+                        "timeout": timeout
+                    }
+                
+                task_payload = {
+                    "tx_id": tx_id,
+                    "id_sucursal": id_sucursal,
+                    "nombre_caja": nombre_caja,
+                    "type": "getnet",
+                    "amount": amount,
+                    "timeout": timeout
+                }
+                
+                q = self.ensure_queue(id_sucursal, nombre_caja)
+                q.put(task_payload)
+                logger.info("Tarea Getnet encolada: tx=%s", tx_id)
+                
+                start_wait = time.time()
+                finished = event.wait(timeout=timeout)
+                wait_time = time.time() - start_wait
+                
+                if not finished:
+                    with self.tasks_lock:
+                        self.tasks.pop(tx_id, None)
+                    self.internal_free_box(id_sucursal, nombre_caja, "timeout")
+                    logger.error("TIMEOUT Getnet tx=%s después de %.2fs", tx_id, wait_time)
+                    return jsonify({
+                        "status": "timeout",
+                        "transaction_id": tx_id,
+                        "message": f"Timeout {timeout}s excedido"
+                    }), 504
+                
+                with self.tasks_lock:
+                    entry = self.tasks.pop(tx_id, {})
+                    res = entry.get("result")
+                    final_estado = entry.get("estado", "DESCONOCIDO")
+                
+                with self.busy_lock:
+                    self.busy_boxes.discard(key)
+                
+                logger.info("Respuesta Getnet: tx=%s, estado=%s, tiempo=%.2fs", 
+                            tx_id, final_estado, wait_time)
+                
+                return jsonify({
+                    "transaction_id": tx_id,
+                    "result": res,
+                    "estado": final_estado,
+                    "tiempo_total": round(wait_time, 2)
+                })
+
             # TRANSBANK FLOW
-            if pos_type == "transbank":
+            elif pos_type == "transbank":
                 id_terminal = data.get("id_terminal", ID_TERMINAL)
                 amount = data.get("amount")
                 if amount is None:
@@ -575,6 +660,22 @@ class APIServer:
                         "puerto": self.pos.get_current_port(),
                         "message": "POS conectado" if pos_online else "POS no detectado"
                     }), 200 if pos_online else 503
+                elif tipo == "getnet":
+                    if not self.getnet:
+                        return jsonify({
+                            "success": False,
+                            "online": False,
+                            "message": "Getnet no habilitado"
+                        }), 503
+                    
+                    online = self.getnet.is_online()
+                    
+                    return jsonify({
+                        "success": True,
+                        "online": online,
+                        "puerto": self.getnet.get_current_port(),
+                        "message": "Getnet conectado" if online else "Getnet no detectado"
+                    }), 200 if online else 503
                 else:
                     return jsonify({
                         "success": True,
