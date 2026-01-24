@@ -34,6 +34,10 @@ TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120"))
 ALLOWED_MP = set([x.strip() for x in os.environ.get("ALLOWED_MP", "").split(",") if x.strip()])
 MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders")
 
+# GETNET POS
+# ¿Esta máquina tiene POS Getnet conectado?
+USAR_GETNET = os.environ.get("USAR_GETNET", "false").lower() == "true"
+
 # Feature detection helpers (runtime)
 def is_flask_available() -> bool:
     try:

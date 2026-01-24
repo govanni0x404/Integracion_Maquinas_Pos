@@ -1,0 +1,9 @@
+2026-01-23 16:40:46,839 [INFO] Logger inicializado
+2026-01-23 16:40:46,851 [INFO] Puertos detectados: ['COM9', 'COM8', 'COM1', 'COM5', 'COM7'] | Preferidos: COM1,COM2,COM3,COM5,COM6,COM7,COM8,COM9
+2026-01-23 16:44:20,370 [INFO] Logger inicializado
+2026-01-23 16:44:20,382 [INFO] Puertos detectados: ['COM9', 'COM8', 'COM1', 'COM5', 'COM7'] | Preferidos: COM8
+2026-01-23 16:56:39,261 [INFO] Logger inicializado
+2026-01-23 16:56:39,271 [INFO] Puertos detectados: ['COM9', 'COM8', 'COM1', 'COM5', 'COM7'] | Preferidos: COM8
+2026-01-23 16:57:18,000 [INFO] Logger inicializado
+2026-01-23 16:57:18,010 [INFO] Puertos detectados: ['COM9', 'COM8', 'COM1', 'COM5', 'COM7'] | Preferidos: COM8
+2026-01-23 17:08:24,175 [WARNING] No se detectó ningún POS (TBK o Getnet) en los puertos listados
