@@ -176,8 +176,8 @@ class POSModule:
         except queue.Empty:
             return {"status": "error", "message": "No se obtuvo respuesta"}
 
-    def start_monitor(self, interval=5):
-        """Inicia un hilo monitor que verifica constantemente el POS."""
+    def start_monitor(self, interval=15):
+        """Monitor inteligente: verifica puerto actual, re-detecta solo si se pierde"""
         if not USAR_POS_FISICO:
             logger.info("Monitor POS no iniciado (USAR_POS_FISICO=false)")
             return
@@ -188,33 +188,48 @@ class POSModule:
         self._stop_monitor.clear()
 
         def monitor():
+            last_detection_attempt = 0
+            detection_cooldown = 30  # Solo re-detectar cada 30 segundos si se pierde
+            
             while not self._stop_monitor.is_set():
                 try:
-                    if not self.get_current_port():
-                        self.detect_port()
-                    else:
-                        p = self.get_current_port()
+                    current = self.get_current_port()
+                    
+                    if current:
+                        # Tenemos puerto: solo verificar que siga conectado
                         try:
                             pos = POSIntegrado()
-                            ok = pos.open_port(p) and pos.poll()
-                            pos.close_port()
-
-                            if not ok:
-                                logger.warning("POS en %s dejó de responder, limpiando puerto.", p)
+                            if pos.open_port(current):
+                                pos.poll()
+                                pos.close_port()
+                                with self.lock:
+                                    self._is_online = True
+                            else:
+                                logger.warning("Puerto %s no responde, marcando offline", current)
                                 with self.lock:
                                     self.current_port = None
-                        except Exception:
+                                    self._is_online = False
+                        except Exception as e:
+                            logger.debug("Error verificando %s: %s", current, e)
                             with self.lock:
                                 self.current_port = None
+                                self._is_online = False
+                    else:
+                        # No hay puerto: intentar re-detectar (con cooldown)
+                        now = time.time()
+                        if now - last_detection_attempt > detection_cooldown:
+                            logger.info("Re-detectando POS...")
+                            self.detect_port()
+                            last_detection_attempt = now
 
                     time.sleep(interval)
                 except Exception as e:
-                    logger.debug("Monitor POS error: %s", e)
+                    logger.debug("Monitor error: %s", e)
                     time.sleep(interval)
 
         self.monitor_thread = threading.Thread(target=monitor, daemon=True)
         self.monitor_thread.start()
-        logger.info("Monitor POS iniciado")
+        logger.info("Monitor POS iniciado (modo inteligente)")
 
     def stop_monitor(self):
         self._stop_monitor.set()
