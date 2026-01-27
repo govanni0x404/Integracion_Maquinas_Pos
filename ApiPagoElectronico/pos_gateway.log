@@ -1,0 +1,62 @@
+2026-01-27 16:42:19,002 [INFO] Logger inicializado
+2026-01-27 16:42:19,071 [INFO] SDK Transbank importado correctamente
+2026-01-27 16:42:19,071 [INFO] TRANSBANK_AVAILABLE = True
+2026-01-27 16:42:19,430 [INFO] Iniciando aplicación...
+2026-01-27 16:42:19,431 [INFO] Lock file creado: pos_gateway.lock (PID=7092)
+2026-01-27 16:42:19,431 [INFO] Verificando reglas de firewall para el puerto 5005...
+2026-01-27 16:42:19,573 [WARNING] Error creando regla inbound: 
+2026-01-27 16:42:19,817 [WARNING] Error creando regla outbound: 
+2026-01-27 16:42:19,817 [INFO] Reglas de firewall listas para el puerto 5005
+2026-01-27 16:42:19,823 [INFO] Monitor POS iniciado
+2026-01-27 16:42:19,824 [INFO] Módulo Getnet inicializado
+2026-01-27 16:42:19,836 [INFO] Agente local registrado 70/caja_10
+2026-01-27 16:42:19,836 [INFO] Local worker iniciado
+2026-01-27 16:42:19,836 [INFO] Local worker thread iniciado
+2026-01-27 16:42:19,838 [INFO] Tarea de limpieza automática iniciada
+2026-01-27 16:42:19,838 [INFO] APIServer inicializado
+2026-01-27 16:42:19,838 [INFO] Servidor Flask arrancando en puerto 5005
+2026-01-27 16:42:19,838 [INFO] Thread de icono de bandeja iniciado
+2026-01-27 16:42:19,844 [INFO] Puertos detectados: ['COM1', 'COM7'] | Preferidos: COM5,COM6,COM7,COM8
+2026-01-27 16:42:19,844 [INFO] Probando puerto COM7...
+2026-01-27 16:42:19,850 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-27 16:42:19,856 [INFO] Notificación Archivo de inicio mostrada
+2026-01-27 16:42:19,859 [INFO] Iniciando icono de bandeja del sistema...
+2026-01-27 16:42:20,059 [INFO] ✓ POS detectado en COM7
+2026-01-27 16:42:29,530 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-27 16:42:29,530 [INFO] Timeout personalizado: 60 segundos
+2026-01-27 16:42:29,530 [INFO] Tarea encolada: tx=9f4dedf5-5283-4697-8a18-7bf54ae87d21, timeout=60, local=True
+2026-01-27 16:42:29,531 [INFO] Procesando: tx=9f4dedf5-5283-4697-8a18-7bf54ae87d21, tipo=transbank, timeout=60
+2026-01-27 16:42:29,532 [INFO] Venta POS -> puerto=COM7 monto=100 ticket=164229
+2026-01-27 16:42:32,196 [INFO] Respuesta POS: {'function_code': 210, 'response_code': '07', 'response_message': 'Transacción Cancelada desde el POS', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'ticket': '164229', 'authorization_code': '', 'amount': '100', 'shares_number': '', 'shares_amount': '', 'last_4_digits': '', 'operation_number': '', 'card_type': '', 'accounting_date': '', 'account_number': '', 'card_brand': '', 'real_date': '', 'real_time': '', 'employee_id': '', 'tip': ''}
+2026-01-27 16:42:32,214 [INFO] Resultado Transbank: failed
+2026-01-27 16:42:32,214 [INFO] Worker completó: tx=9f4dedf5-5283-4697-8a18-7bf54ae87d21, estado=RECHAZADO
+2026-01-27 16:42:32,214 [INFO] Respuesta: tx=9f4dedf5-5283-4697-8a18-7bf54ae87d21, estado=RECHAZADO, tiempo=2.68s
+2026-01-27 16:42:35,338 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM4', 'COM7'] | Preferidos: COM5,COM6,COM7,COM8
+2026-01-27 16:42:35,338 [INFO] Probando puerto COM5...
+2026-01-27 16:42:35,387 [INFO] Puerto COM5 abierto, ejecutando poll...
+2026-01-27 16:42:36,297 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-27 16:42:36,298 [INFO] Tarea Getnet encolada: tx=67842f0c-f784-461a-85f0-9758dab2f4b4
+2026-01-27 16:42:36,298 [INFO] Procesando: tx=67842f0c-f784-461a-85f0-9758dab2f4b4, tipo=getnet, timeout=120
+2026-01-27 16:42:36,298 [INFO] [GETNET] Iniciando venta: $1000
+2026-01-27 16:42:36,298 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-27 16:42:36,304 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM4', 'COM7']
+2026-01-27 16:42:36,304 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-27 16:42:39,886 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-27 16:42:39,886 [INFO] [GETNET] Probando COM4 (prioridad: 60)...
+2026-01-27 16:42:43,469 [INFO] [GETNET] Probando COM7 (prioridad: 60)...
+2026-01-27 16:42:47,032 [INFO] [GETNET] Probando COM1 (prioridad: 40)...
+2026-01-27 16:42:50,638 [WARNING] [GETNET] No se encontró puerto Getnet funcional
+2026-01-27 16:42:50,639 [ERROR] [GETNET] No se pudo detectar puerto Getnet
+2026-01-27 16:42:50,639 [INFO] Resultado Getnet: error
+2026-01-27 16:42:50,639 [INFO] Worker completó: tx=67842f0c-f784-461a-85f0-9758dab2f4b4, estado=ERROR
+2026-01-27 16:42:50,639 [INFO] Respuesta Getnet: tx=67842f0c-f784-461a-85f0-9758dab2f4b4, estado=ERROR, tiempo=14.34s
+2026-01-27 16:42:59,720 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=mercadopago
+2026-01-27 16:42:59,720 [INFO] Timeout personalizado: 60 segundos
+2026-01-27 16:42:59,720 [INFO] Procesando MercadoPago terminal=NEWLAND_N950__N950NCC503616517 monto=100 timeout=60
+2026-01-27 16:43:00,390 [INFO] Respuesta inicial MercadoPago (201): {"id": "ORD01KG0FP466B8NBXRR13EB8XVYW", "type": "point", "processing_mode": "automatic", "external_reference": "ext_ref_f37ef158", "description": "Venta POS", "expiration_time": "PT16M", "country_code": "CHL", "user_id": "2379339163", "status": "created", "status_detail": "created", "currency": "CLP", "created_date": "2026-01-27T19:42:59.939Z", "last_updated_date": "2026-01-27T19:42:59.939Z", "integration_data": {"application_id": "264907018128872"}, "config": {"point": {"terminal_id": "NEWLAND_N950__N950NCC503616517", "print_on_terminal": "no_ticket"}}, "transactions": {"payments": [{"id": "PAY01KG0FP466B8NBXRR13EH2N4YV", "amount": "100", "status": "created"}]}}
+2026-01-27 16:43:00,390 [INFO] Orden MP creada: ORD01KG0FP466B8NBXRR13EB8XVYW; esperando resultado...
+2026-01-27 16:43:00,857 [INFO] Estado actual orden MP ORD01KG0FP466B8NBXRR13EB8XVYW: 200 -> {"id": "ORD01KG0FP466B8NBXRR13EB8XVYW", "type": "point", "processing_mode": "automatic", "external_reference": "ext_ref_f37ef158", "description": "Venta POS", "expiration_time": "PT16M", "country_code": "CHL", "user_id": "2379339163", "status": "created", "status_detail": "created", "currency": "CLP", "created_date": "2026-01-27T19:42:59.939Z", "last_updated_date": "2026-01-27T19:42:59.939Z", "integration_data": {"application_id": "264907018128872"}, "config": {"point": {"terminal_id": "NEWLAND_N950__N950NCC503616517", "print_on_terminal": "no_ticket"}}, "transactions": {"payments": [{"id": "PAY01KG0FP466B8NBXRR13EH2N4YV", "amount": "100", "status": "created"}]}}
+2026-01-27 16:43:04,348 [INFO] Estado actual orden MP ORD01KG0FP466B8NBXRR13EB8XVYW: 200 -> {"id": "ORD01KG0FP466B8NBXRR13EB8XVYW", "type": "point", "processing_mode": "automatic", "external_reference": "ext_ref_f37ef158", "description": "Venta POS", "expiration_time": "PT16M", "country_code": "CHL", "user_id": "2379339163", "status": "at_terminal", "status_detail": "at_terminal", "currency": "CLP", "created_date": "2026-01-27T19:42:59.939Z", "last_updated_date": "2026-01-27T19:43:01.035Z", "integration_data": {"application_id": "264907018128872"}, "config": {"point": {"terminal_id": "NEWLAND_N950__N950NCC503616517", "print_on_terminal": "no_ticket"}}, "transactions": {"payments": [{"id": "PAY01KG0FP466B8NBXRR13EH2N4YV", "amount": "100", "status": "at_terminal"}]}}
+2026-01-27 16:43:07,838 [INFO] Estado actual orden MP ORD01KG0FP466B8NBXRR13EB8XVYW: 200 -> {"id": "ORD01KG0FP466B8NBXRR13EB8XVYW", "type": "point", "processing_mode": "automatic", "external_reference": "ext_ref_f37ef158", "description": "Venta POS", "expiration_time": "PT16M", "country_code": "CHL", "user_id": "2379339163", "status": "canceled", "status_detail": "canceled", "currency": "CLP", "created_date": "2026-01-27T19:42:59.939Z", "last_updated_date": "2026-01-27T19:43:04.074Z", "integration_data": {"application_id": "264907018128872"}, "config": {"point": {"terminal_id": "NEWLAND_N950__N950NCC503616517", "print_on_terminal": "no_ticket"}}, "transactions": {"payments": [{"id": "PAY01KG0FP466B8NBXRR13EH2N4YV", "amount": "100", "status": "canceled", "status_detail": "cancel_by_terminal"}]}}
+2026-01-27 16:43:07,838 [INFO] Orden ORD01KG0FP466B8NBXRR13EB8XVYW finalizada con estado: canceled
+2026-01-27 16:43:07,838 [INFO] Respuesta final MercadoPago: {"id": "ORD01KG0FP466B8NBXRR13EB8XVYW", "type": "point", "processing_mode": "automatic", "external_reference": "ext_ref_f37ef158", "description": "Venta POS", "expiration_time": "PT16M", "country_code": "CHL", "user_id": "2379339163", "status": "canceled", "status_detail": "canceled", "currency": "CLP", "created_date": "2026-01-27T19:42:59.939Z", "last_updated_date": "2026-01-27T19:43:04.074Z", "integration_data": {"application_id": "264907018128872"}, "config": {"point": {"terminal_id": "NEWLAND_N950__N950NCC503616517", "print_on_terminal": "no_ticket"}}, "transactions": {"payments": [{"id": "PAY01KG0FP466B8NBXRR13EH2N4YV", "amount": "100", "status": "canceled", "status_detail": "cancel_by_terminal"}]}}
