@@ -12,11 +12,19 @@ from config.settings import APP_NAME,PUERTOS_COM, USAR_POS_FISICO, MAX_TRANSACTI
 logger = logging.getLogger(APP_NAME)
 
 try:
-    import serial.tools.list_ports
-    from transbank import POSIntegrado
+    #from transbank import POSIntegrado
+    from transbank.POS.POSIntegrado import POSIntegrado
     TRANSBANK_AVAILABLE = True
-except Exception:
+    logger.info("SDK Transbank importado correctamente")
+except ImportError as e:
     TRANSBANK_AVAILABLE = False
+    logger.error("ImportError al cargar Transbank: %s", str(e))
+except Exception as e:
+    TRANSBANK_AVAILABLE = False
+    logger.error("Error desconocido al cargar Transbank: %s", str(e))
+    logger.error("Traceback completo:\n%s", traceback.format_exc())
+
+logger.info("TRANSBANK_AVAILABLE = %s", TRANSBANK_AVAILABLE)
 
 class POSModule:
     """
@@ -62,29 +70,39 @@ class POSModule:
         for p in ordered:
             pos = None
             try:
+                logger.info("Probando puerto %s...", p)  # ← AGREGAR ESTE LOG
                 pos = POSIntegrado()
 
-                if pos.open_port(p) and pos.poll():
+                if not pos.open_port(p):
+                    logger.warning("No se pudo abrir puerto %s", p)  # ← CAMBIAR A WARNING
+                    continue
+
+                logger.info("Puerto %s abierto, ejecutando poll...", p)  # ← AGREGAR ESTE LOG
+                
+                if pos.poll():
                     try:
                         pos.close_port()
                     except Exception:
                         pass
 
-                    logger.info("POS detectado en %s", p)
+                    logger.info("✓ POS detectado en %s", p)
                     with self.lock:
                         self.current_port = p
                         self._is_online = True
 
                     self.last_ok = time.time()
                     return p
+                else:
+                    logger.warning("Puerto %s no respondió al poll", p)  # ← CAMBIAR A WARNING
+                    
             except Exception as e:
-                logger.debug("Puerto %s no usable: %s", p, e)
+                logger.warning("Puerto %s error: %s\n%s", p, e, traceback.format_exc())  # ← CAMBIAR A WARNING y AGREGAR TRACEBACK
             finally:
                 try:
                     if pos:
                         pos.close_port()
-                except Exception:
-                    pass
+                except Exception as ex:
+                    logger.debug("Error cerrando puerto %s: %s", p, ex)  # ← AGREGAR LOG
 
         logger.warning("No se detectó POS en los puertos listados")
         with self.lock:

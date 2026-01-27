@@ -9,7 +9,8 @@ pyserial==3.5
 python-dotenv==1.1.1
 requests==2.32.4
 transbank-pos-sdk==1.0.1
-transbank-sdk==6.1.0
+#transbank-sdk==6.1.0
 
 # Saber que usa y requiere el programa  "pip freeze > requirements.txt"
 # Usar  "pip install -r requirements.txt" para instalar todo
+#pip install transbank-pos-sdk
