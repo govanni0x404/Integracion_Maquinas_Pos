@@ -25,22 +25,43 @@ def main():
     except Exception as e:
         logger.exception("Error al abrir puerto en firewall: %s", e)
 
-    # Módulo POS
-    pos_module = POSModule(PUERTOS_COM)
-    if USAR_POS_FISICO:
-        pos_module.start_monitor()
-
-    #Módulo POS Getnet
+    detected_ports = {"transbank": None, "getnet": None}
+    
+    # 1. Detectar Getnet PRIMERO (es más específico en su detección)
     getnet_module = None
     if USAR_GETNET:
         try:
             getnet_module = GetnetModule()
-            logger.info("Módulo Getnet inicializado")
+            if getnet_module.port:
+                detected_ports["getnet"] = getnet_module.port
+                logger.info(f"✓ Getnet detectado en {getnet_module.port}")
+            else:
+                logger.warning("Getnet habilitado pero no se detectó puerto")
         except Exception as e:
             logger.error(f"Error inicializando Getnet: {e}")
-
+    
+    # 2. Detectar Transbank DESPUÉS (excluyendo puerto de Getnet)
+    pos_module = POSModule(PUERTOS_COM)
+    if USAR_POS_FISICO:
+        # Excluir puerto de Getnet si se detectó
+        if detected_ports["getnet"]:
+            # Temporal: remover puerto de Getnet de la lista de preferidos
+            original_ports = pos_module.prefer_ports.copy()
+            pos_module.prefer_ports = [p for p in original_ports if p != detected_ports["getnet"]]
+            logger.info(f"Transbank buscará en: {pos_module.prefer_ports} (excluyendo Getnet en {detected_ports['getnet']})")
+        
+        # Detectar Transbank
+        detected_port = pos_module.detect_port()
+        if detected_port:
+            detected_ports["transbank"] = detected_port
+            logger.info(f"✓ Transbank detectado en {detected_port}")
+        
+        # Iniciar monitor ligero (solo verifica puerto detectado)
+        pos_module.start_monitor()
+    
+    logger.info(f"Puertos asignados: {detected_ports}")
+    
     # Servidor API
-    #server = APIServer(pos_module)
     server = APIServer(pos_module, getnet_module)
 
     # Icono bandeja
