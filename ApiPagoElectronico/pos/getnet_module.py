@@ -25,11 +25,22 @@ class GetnetModule:
         self.baudrate = 115200
         self.serial_connection = None
         self.last_error = None
+        self._port_cache = None
     
     def _find_getnet_port(self):
         """Detectar automáticamente el puerto del POS Getnet"""
         logger.info("[GETNET] Buscando puerto automáticamente...")
         
+        if self._port_cache:
+            logger.info(f"[GETNET] Usando puerto cacheado: {self._port_cache}")
+            if self._test_port_connection(self._port_cache):
+                return self._port_cache
+            else:
+                logger.warning(f"[GETNET] Puerto cacheado {self._port_cache} no responde, re-detectando...")
+                self._port_cache = None
+        
+        logger.info("[GETNET] Buscando puerto automáticamente...")
+
         available_ports = serial.tools.list_ports.comports()
         
         if not available_ports:
@@ -74,14 +85,14 @@ class GetnetModule:
             test_connection = serial.Serial(
                 port=port_name,
                 baudrate=self.baudrate,
-                timeout=2,
-                write_timeout=2,
+                timeout=1,
+                write_timeout=1,
                 xonxoff=False,
                 rtscts=False,
                 dsrdtr=False
             )
             
-            time.sleep(0.5)
+            time.sleep(0.3)
             test_connection.reset_output_buffer()
             test_connection.reset_input_buffer()
             
@@ -108,7 +119,7 @@ class GetnetModule:
             start = time.time()
             buffer = ""
             
-            while time.time() - start < 3:
+            while time.time() - start < 1.5:
                 if test_connection.in_waiting:
                     data = test_connection.read(test_connection.in_waiting).decode('utf-8', errors='ignore')
                     buffer += data
@@ -116,7 +127,7 @@ class GetnetModule:
                     if any(k in buffer for k in ['JsonSerialized', 'FunctionCode', 'ResponseCode']):
                         return True
                 
-                time.sleep(0.1)
+                time.sleep(0.05)
             
             return False
         
