@@ -3,6 +3,7 @@ import psutil
 import logging
 import atexit
 import signal
+import sys
 from pathlib import Path
 from config.settings import APP_NAME
 from typing import Optional
@@ -34,24 +35,29 @@ def _process_info(pid):
 
 
 def _ask_yes_no(prompt: str, default: Optional[bool] = None) -> bool:
+    # Si no hay stdin interactivo, no preguntar
+    if not sys.stdin or not sys.stdin.isatty():
+        logger.info("Sin stdin interactivo. Usando valor por defecto.")
+        return bool(default) if default is not None else False
+
     suffix = " [s/n]" if default is None else (" [S/n]" if default else " [s/N]")
     while True:
         try:
             ans = input(prompt + suffix + " ").strip().lower()
-        except EOFError:
+        except (EOFError, RuntimeError):
             return bool(default) if default is not None else False
 
         if not ans:
             if default is not None:
                 return default
-            else:
-                continue
+            continue
+
         if ans in ("s", "si", "sí", "y", "yes"):
             return True
         if ans in ("n", "no"):
             return False
-        logger.info("Por favor responde 's' o 'n'.")
 
+        logger.info("Por favor responde 's' o 'n'.")
 
 def ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=5) -> bool:
     """

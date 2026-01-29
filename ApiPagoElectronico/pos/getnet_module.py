@@ -263,10 +263,7 @@ class GetnetModule:
         while time.time() - start < timeout:
             try:
                 if self.serial_connection.in_waiting:
-                    data = self.serial_connection.read(
-                        self.serial_connection.in_waiting
-                    ).decode('utf-8', errors='ignore')
-                    
+                    data = self.serial_connection.read(self.serial_connection.in_waiting).decode('utf-8', errors='ignore')
                     buffer += data
                     
                     response = self._extract_json_response(buffer)
