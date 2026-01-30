@@ -73,13 +73,52 @@ class POSModule:
                 logger.info("Probando puerto %s...", p)  # ← AGREGAR ESTE LOG
                 pos = POSIntegrado()
 
-                if not pos.open_port(p):
-                    logger.warning("No se pudo abrir puerto %s", p)  # ← CAMBIAR A WARNING
+                port_opened = [False]
+                error_msg = [None]
+
+                def try_open():
+                    try:
+                        port_opened[0] = pos.open_port(p)
+                    except Exception as e:
+                        error_msg[0] = str(e)
+                        logger.warning("Error abriendo %s: %s", p, e)
+                
+                t = threading.Thread(target=try_open, daemon=True)
+                t.start()
+                t.join(timeout=3)  # ← TIMEOUT DE 3 SEGUNDOS
+                
+                if t.is_alive():
+                    logger.warning("Timeout (3s) abriendo puerto %s", p)
+                    continue
+                
+                if error_msg[0]:
+                    logger.warning("Error en puerto %s: %s", p, error_msg[0])
+                    continue
+                
+                if not port_opened[0]:
+                    logger.warning("No se pudo abrir puerto %s", p)
                     continue
 
-                logger.info("Puerto %s abierto, ejecutando poll...", p)  # ← AGREGAR ESTE LOG
+                logger.info("Puerto %s abierto, ejecutando poll...", p)
                 
-                if pos.poll():
+                # TIMEOUT PARA POLL
+                poll_result = [False]
+                
+                def try_poll():
+                    try:
+                        poll_result[0] = pos.poll()
+                    except Exception as e:
+                        logger.warning("Error en poll %s: %s", p, e)
+                
+                t2 = threading.Thread(target=try_poll, daemon=True)
+                t2.start()
+                t2.join(timeout=2)  # ← TIMEOUT DE 2 SEGUNDOS
+                
+                if t2.is_alive():
+                    logger.warning("Timeout en poll de puerto %s", p)
+                    continue
+                
+                if poll_result[0]:
                     try:
                         pos.close_port()
                     except Exception:
@@ -93,22 +132,59 @@ class POSModule:
                     self.last_ok = time.time()
                     return p
                 else:
-                    logger.warning("Puerto %s no respondió al poll", p)  # ← CAMBIAR A WARNING
-                    
+                    logger.warning("Puerto %s no respondió al poll", p)
+                        
             except Exception as e:
-                logger.warning("Puerto %s error: %s\n%s", p, e, traceback.format_exc())  # ← CAMBIAR A WARNING y AGREGAR TRACEBACK
+                logger.warning("Puerto %s error: %s", p, e)
             finally:
                 try:
                     if pos:
                         pos.close_port()
                 except Exception as ex:
-                    logger.debug("Error cerrando puerto %s: %s", p, ex)  # ← AGREGAR LOG
+                    logger.debug("Error cerrando puerto %s: %s", p, ex)
 
         logger.warning("No se detectó POS en los puertos listados")
         with self.lock:
             self.current_port = None
             self._is_online = False
         return None
+
+        #         if not pos.open_port(p):
+        #             logger.warning("No se pudo abrir puerto %s", p)  # ← CAMBIAR A WARNING
+        #             continue
+
+        #         logger.info("Puerto %s abierto, ejecutando poll...", p)  # ← AGREGAR ESTE LOG
+                
+        #         if pos.poll():
+        #             try:
+        #                 pos.close_port()
+        #             except Exception:
+        #                 pass
+
+        #             logger.info("✓ POS detectado en %s", p)
+        #             with self.lock:
+        #                 self.current_port = p
+        #                 self._is_online = True
+
+        #             self.last_ok = time.time()
+        #             return p
+        #         else:
+        #             logger.warning("Puerto %s no respondió al poll", p)  # ← CAMBIAR A WARNING
+                    
+        #     except Exception as e:
+        #         logger.warning("Puerto %s error: %s\n%s", p, e, traceback.format_exc())  # ← CAMBIAR A WARNING y AGREGAR TRACEBACK
+        #     finally:
+        #         try:
+        #             if pos:
+        #                 pos.close_port()
+        #         except Exception as ex:
+        #             logger.debug("Error cerrando puerto %s: %s", p, ex)  # ← AGREGAR LOG
+
+        # logger.warning("No se detectó POS en los puertos listados")
+        # with self.lock:
+        #     self.current_port = None
+        #     self._is_online = False
+        # return None
 
     def get_current_port(self):
         with self.lock:

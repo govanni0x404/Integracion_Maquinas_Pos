@@ -1,9 +1,9 @@
 import os
+import sys  # ← AGREGAR ESTA LÍNEA
 import psutil
 import logging
 import atexit
 import signal
-import sys
 from pathlib import Path
 from config.settings import APP_NAME
 from typing import Optional
@@ -32,32 +32,49 @@ def _process_info(pid):
     except Exception:
         return None, f"(pid={pid})"
 
-
-
 def _ask_yes_no(prompt: str, default: Optional[bool] = None) -> bool:
-    # Si no hay stdin interactivo, no preguntar
-    if not sys.stdin or not sys.stdin.isatty():
-        logger.info("Sin stdin interactivo. Usando valor por defecto.")
-        return bool(default) if default is not None else False
-
-    suffix = " [s/n]" if default is None else (" [S/n]" if default else " [s/N]")
-    while True:
+    """Pregunta sí/no. Si no hay terminal interactiva, usa el default."""
+    try:
+        # Si no hay terminal interactiva o stdin, usar default inmediatamente
+        if not sys.stdin or not sys.stdin.isatty():
+            logger.info(f"Sin terminal interactiva, usando default={default}")
+            return bool(default) if default is not None else True
+    except Exception as e:
+        logger.info(f"Error verificando terminal: {e}, usando default={default}")
+        return bool(default) if default is not None else True
+    
+    # Hay terminal interactiva: preguntar
+    suffix = " [s/n]: " if default is None else (" [S/n]: " if default else " [s/N]: ")
+    
+    for attempt in range(3):
         try:
-            ans = input(prompt + suffix + " ").strip().lower()
-        except (EOFError, RuntimeError):
-            return bool(default) if default is not None else False
+            print(prompt + suffix, end='', flush=True)
+            ans = sys.stdin.readline().strip().lower()
+            
+            if not ans:
+                if default is not None:
+                    return default
+                else:
+                    print("Por favor responde 's' o 'n'.")
+                    continue
 
-        if not ans:
-            if default is not None:
-                return default
-            continue
-
-        if ans in ("s", "si", "sí", "y", "yes"):
-            return True
-        if ans in ("n", "no"):
-            return False
-
-        logger.info("Por favor responde 's' o 'n'.")
+            if ans in ("s", "si", "sí", "y", "yes"):
+                return True
+            if ans in ("n", "no"):
+                return False
+            
+            print("Por favor responde 's' o 'n'.")
+            
+        except (EOFError, KeyboardInterrupt):
+            logger.info("\nEntrada interrumpida")
+            return bool(default) if default is not None else True
+        except Exception as e:
+            logger.warning(f"Error leyendo entrada: {e}")
+            return bool(default) if default is not None else True
+    
+    # Después de 3 intentos, usar default
+    logger.warning("Demasiados intentos fallidos, usando default")
+    return bool(default) if default is not None else True
 
 def ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=5) -> bool:
     """
@@ -157,8 +174,6 @@ def _register_lock_cleanup_handlers():
             except Exception:
                 pass
 
-
-
 # --- Compatibilidad con código existente ---
 def ensure_single_instance(stop_existing_default=None, wait_seconds=5):
     """
@@ -171,7 +186,7 @@ def ensure_single_instance(stop_existing_default=None, wait_seconds=5):
     )
 
 # opcional, para dejar claro qué exporta el módulo
-_all_ = [
+__all__ = [
     "ensure_single_instance_interactive",
     "ensure_single_instance",
     "cleanup_lock",

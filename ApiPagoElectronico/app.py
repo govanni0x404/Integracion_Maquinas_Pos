@@ -11,7 +11,7 @@ from config.settings import PUERTOS_COM, HTTP_PORT, USAR_POS_FISICO, USAR_GETNET
 def main():
     logger.info("Iniciando aplicación...")
 
-    if not ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=5):
+    if not ensure_single_instance_interactive(stop_existing_default=True, wait_seconds=5):
        logger.info("Saliendo por decision del usuario o error al tomar el lock")        
        return
 
