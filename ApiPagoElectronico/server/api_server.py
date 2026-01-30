@@ -456,9 +456,33 @@ class APIServer:
                         "error": "POS Getnet no habilitado en esta máquina"
                     }), 503
                 
+                # Validar campos obligatorios para Getnet
+                terminal_id = data.get("terminal_id")
                 amount = data.get("amount")
+                custom_timeout = data.get("timeout")
+                
+                # Validaciones obligatorias
+                if terminal_id is None:
+                    return jsonify({"error": "terminal_id requerido para Getnet"}), 400
                 if amount is None:
                     return jsonify({"error": "amount requerido"}), 400
+                if custom_timeout is None:
+                    return jsonify({"error": "timeout requerido para Getnet"}), 400
+                
+                # Validar rango de timeout
+                try:
+                    timeout = int(custom_timeout)
+                    timeout = max(30, min(timeout, 300))
+                    logger.info("Timeout Getnet: %s segundos", timeout)
+                except (ValueError, TypeError):
+                    return jsonify({"error": "timeout debe ser un número válido"}), 400
+                
+                # Validar que terminal_id coincida con el del .env
+                if terminal_id != ID_TERMINAL:
+                    return jsonify({
+                        "status": "forbidden",
+                        "message": f"El terminal_id no coincide con la configuración de esta máquina"
+                    }), 403
                 
                 key = (id_sucursal, nombre_caja)
                 with self.busy_lock:
@@ -486,6 +510,7 @@ class APIServer:
                     "id_sucursal": id_sucursal,
                     "nombre_caja": nombre_caja,
                     "type": "getnet",
+                    "terminal_id": terminal_id,
                     "amount": amount,
                     "timeout": timeout
                 }
@@ -529,10 +554,34 @@ class APIServer:
 
             # TRANSBANK FLOW
             elif pos_type == "transbank":
-                id_terminal = data.get("id_terminal", ID_TERMINAL)
-                amount = data.get("amount")
-                if amount is None:
+                
+                #validar campos obligatorios
+                terminal_id_transbank = data.get("terminal_id")
+                amount_transbank = data.get("amount")
+                timeout_transbank = data.get("timeout")
+                
+                #validaciones obligatorias
+                if terminal_id_transbank is None:
+                    return jsonify({"error": "terminal_id requerido para Transbank"}), 400
+                if amount_transbank is None:
                     return jsonify({"error": "amount requerido"}), 400
+                if timeout_transbank is None:
+                    return jsonify({"error": "timeout requerido para Transbank"}), 400
+
+                #validar rango de timeout
+                try:
+                    timeout_transbank = int(timeout_transbank)
+                    timeout_transbank = max(30, min(timeout_transbank, 300))
+                    logger.info("Timeout Transbank: %s segundos", timeout_transbank)
+                except (ValueError, TypeError):
+                    return jsonify({"error": "timeout debe ser un número válido"}), 400
+
+                #validar que terminal_id coincida con el del .env
+                if terminal_id_transbank != ID_TERMINAL:
+                    return jsonify({
+                        "status": "forbidden",
+                        "message": f"El terminal_id no coincide con la configuración de esta máquina"
+                    }), 403
 
                 key = (id_sucursal, nombre_caja)
                 with self.busy_lock:
@@ -552,7 +601,7 @@ class APIServer:
                         "id_sucursal": id_sucursal,
                         "nombre_caja": nombre_caja,
                         "timestamp": time.time(),
-                        "timeout": timeout
+                        "timeout": timeout_transbank
                     }
 
                 task_payload = {
@@ -560,17 +609,17 @@ class APIServer:
                     "id_sucursal": id_sucursal,
                     "nombre_caja": nombre_caja,
                     "type": "transbank",
-                    "id_terminal": id_terminal,
-                    "amount": amount,
-                    "timeout": timeout
+                    "id_terminal": terminal_id_transbank,
+                    "amount": amount_transbank,
+                    "timeout": timeout_transbank
                 }
 
                 q = self.ensure_queue(id_sucursal, nombre_caja)
                 q.put(task_payload)
-                logger.info("Tarea encolada: tx=%s, timeout=%s, local=%s", tx_id, timeout, is_local)
+                logger.info("Tarea encolada: tx=%s, timeout=%s, local=%s", tx_id, timeout_transbank, is_local)
 
                 start_wait = time.time()
-                finished = event.wait(timeout=timeout)
+                finished = event.wait(timeout=timeout_transbank)
                 wait_time = time.time() - start_wait
 
                 if not finished:

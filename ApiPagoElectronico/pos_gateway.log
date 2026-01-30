@@ -1,0 +1,308 @@
+2026-01-30 10:21:19,344 [INFO] Logger inicializado
+2026-01-30 10:21:19,405 [INFO] SDK Transbank importado correctamente
+2026-01-30 10:21:19,405 [INFO] TRANSBANK_AVAILABLE = True
+2026-01-30 10:21:19,826 [INFO] Iniciando aplicación...
+2026-01-30 10:21:19,826 [INFO] Lock file creado: pos_gateway.lock (PID=14524)
+2026-01-30 10:21:19,826 [INFO] Verificando reglas de firewall para el puerto 5005...
+2026-01-30 10:21:19,985 [WARNING] Error creando regla inbound: 
+2026-01-30 10:21:20,145 [WARNING] Error creando regla outbound: 
+2026-01-30 10:21:20,145 [INFO] Reglas de firewall listas para el puerto 5005
+2026-01-30 10:21:20,145 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:21:20,145 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:21:20,155 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:21:20,155 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:21:22,008 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:21:22,384 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:21:22,384 [WARNING] Getnet habilitado pero no se detectó puerto
+2026-01-30 10:21:22,405 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4'] | Preferidos: COM6,COM7,COM8
+2026-01-30 10:21:22,406 [INFO] Probando puerto COM7...
+2026-01-30 10:21:22,408 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-30 10:21:22,617 [INFO] ✓ POS detectado en COM7
+2026-01-30 10:21:22,617 [INFO] ✓ Transbank detectado en COM7
+2026-01-30 10:21:22,618 [INFO] Monitor POS iniciado (modo inteligente)
+2026-01-30 10:21:22,618 [INFO] Puertos asignados: {'transbank': 'COM7', 'getnet': None}
+2026-01-30 10:21:22,633 [INFO] Agente local registrado 70/caja_10
+2026-01-30 10:21:22,634 [INFO] Local worker iniciado
+2026-01-30 10:21:22,635 [INFO] Local worker thread iniciado
+2026-01-30 10:21:22,635 [INFO] Tarea de limpieza automática iniciada
+2026-01-30 10:21:22,636 [INFO] APIServer inicializado
+2026-01-30 10:21:22,637 [INFO] Servidor Flask arrancando en puerto 5005
+2026-01-30 10:21:22,637 [INFO] Thread de icono de bandeja iniciado
+2026-01-30 10:21:22,661 [INFO] Notificación Archivo de inicio mostrada
+2026-01-30 10:21:22,665 [INFO] Iniciando icono de bandeja del sistema...
+2026-01-30 10:21:25,383 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:21:25,383 [INFO] Tarea Getnet encolada: tx=0c329cef-6a0b-4e89-abab-a48f843cb272
+2026-01-30 10:21:25,383 [INFO] Procesando: tx=0c329cef-6a0b-4e89-abab-a48f843cb272, tipo=getnet, timeout=120
+2026-01-30 10:21:25,383 [INFO] [GETNET] Iniciando venta: $1000
+2026-01-30 10:21:25,383 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:21:25,383 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:21:25,392 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:21:25,393 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:21:27,202 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:21:27,575 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:21:27,575 [INFO] [GETNET] Conectando a COM5...
+2026-01-30 10:21:28,587 [INFO] [GETNET] ✓ Conectado a COM5
+2026-01-30 10:21:29,097 [INFO] [GETNET] Esperando usuario en POS...
+2026-01-30 10:21:32,701 [WARNING] [GETNET] Venta CANCELADA por usuario
+2026-01-30 10:21:32,702 [INFO] [GETNET] Desconectado
+2026-01-30 10:21:32,702 [INFO] Resultado Getnet: failed
+2026-01-30 10:21:32,702 [INFO] Worker completó: tx=0c329cef-6a0b-4e89-abab-a48f843cb272, estado=RECHAZADO
+2026-01-30 10:21:32,702 [INFO] Respuesta Getnet: tx=0c329cef-6a0b-4e89-abab-a48f843cb272, estado=RECHAZADO, tiempo=7.32s
+2026-01-30 10:22:43,440 [INFO] Recibida señal 2. Limpiando lock y saliendo.
+2026-01-30 10:22:43,441 [INFO] Lock file eliminado: pos_gateway.lock
+2026-01-30 10:22:58,206 [INFO] Logger inicializado
+2026-01-30 10:22:58,262 [INFO] SDK Transbank importado correctamente
+2026-01-30 10:22:58,262 [INFO] TRANSBANK_AVAILABLE = True
+2026-01-30 10:22:58,646 [INFO] Iniciando aplicación...
+2026-01-30 10:22:58,647 [INFO] Lock file creado: pos_gateway.lock (PID=14272)
+2026-01-30 10:22:58,647 [INFO] Verificando reglas de firewall para el puerto 5005...
+2026-01-30 10:22:58,800 [WARNING] Error creando regla inbound: 
+2026-01-30 10:22:58,989 [WARNING] Error creando regla outbound: 
+2026-01-30 10:22:58,990 [INFO] Reglas de firewall listas para el puerto 5005
+2026-01-30 10:22:58,990 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:22:58,990 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:22:59,000 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:22:59,000 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:23:00,847 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:23:01,218 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:23:01,219 [WARNING] Getnet habilitado pero no se detectó puerto
+2026-01-30 10:23:01,247 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4'] | Preferidos: COM6,COM7,COM8
+2026-01-30 10:23:01,247 [INFO] Probando puerto COM7...
+2026-01-30 10:23:01,249 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-30 10:23:01,466 [INFO] ✓ POS detectado en COM7
+2026-01-30 10:23:01,466 [INFO] ✓ Transbank detectado en COM7
+2026-01-30 10:23:01,468 [INFO] Monitor POS iniciado (modo inteligente)
+2026-01-30 10:23:01,468 [INFO] Puertos asignados: {'transbank': 'COM7', 'getnet': None}
+2026-01-30 10:23:01,492 [INFO] Agente local registrado 70/caja_10
+2026-01-30 10:23:01,493 [INFO] Local worker iniciado
+2026-01-30 10:23:01,494 [INFO] Local worker thread iniciado
+2026-01-30 10:23:01,495 [INFO] Tarea de limpieza automática iniciada
+2026-01-30 10:23:01,495 [INFO] APIServer inicializado
+2026-01-30 10:23:01,498 [INFO] Servidor Flask arrancando en puerto 5005
+2026-01-30 10:23:01,499 [INFO] Thread de icono de bandeja iniciado
+2026-01-30 10:23:01,527 [INFO] Notificación Archivo de inicio mostrada
+2026-01-30 10:23:01,531 [INFO] Iniciando icono de bandeja del sistema...
+2026-01-30 10:23:03,338 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:23:20,128 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:23:31,946 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:23:31,946 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:23:31,946 [INFO] Timeout Getnet: 60 segundos
+2026-01-30 10:23:31,946 [INFO] Tarea Getnet encolada: tx=19c75769-c756-4f42-a24f-ba07bd63b627
+2026-01-30 10:23:31,947 [INFO] Procesando: tx=19c75769-c756-4f42-a24f-ba07bd63b627, tipo=getnet, timeout=60
+2026-01-30 10:23:31,947 [INFO] [GETNET] Iniciando venta: $1000
+2026-01-30 10:23:31,947 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:23:31,947 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:23:31,955 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:23:31,956 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:23:33,781 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:23:34,158 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:23:34,158 [INFO] [GETNET] Conectando a COM5...
+2026-01-30 10:23:35,161 [INFO] [GETNET] ✓ Conectado a COM5
+2026-01-30 10:23:35,665 [INFO] [GETNET] Esperando usuario en POS...
+2026-01-30 10:23:38,922 [WARNING] [GETNET] Venta CANCELADA por usuario
+2026-01-30 10:23:38,923 [INFO] [GETNET] Desconectado
+2026-01-30 10:23:38,923 [INFO] Resultado Getnet: failed
+2026-01-30 10:23:38,923 [INFO] Worker completó: tx=19c75769-c756-4f42-a24f-ba07bd63b627, estado=RECHAZADO
+2026-01-30 10:23:38,923 [INFO] Respuesta Getnet: tx=19c75769-c756-4f42-a24f-ba07bd63b627, estado=RECHAZADO, tiempo=6.98s
+2026-01-30 10:23:42,697 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:23:42,698 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:23:42,698 [INFO] Timeout Getnet: 60 segundos
+2026-01-30 10:23:42,698 [INFO] Tarea Getnet encolada: tx=1517a0f4-9df3-448f-8e07-690af1c8a674
+2026-01-30 10:23:42,698 [INFO] Procesando: tx=1517a0f4-9df3-448f-8e07-690af1c8a674, tipo=getnet, timeout=60
+2026-01-30 10:23:42,698 [INFO] [GETNET] Iniciando venta: $1000
+2026-01-30 10:23:42,698 [INFO] [GETNET] Conectando a COM5...
+2026-01-30 10:23:43,705 [INFO] [GETNET] ✓ Conectado a COM5
+2026-01-30 10:23:44,220 [INFO] [GETNET] Esperando usuario en POS...
+2026-01-30 10:23:47,928 [WARNING] [GETNET] Venta CANCELADA por usuario
+2026-01-30 10:23:47,929 [INFO] [GETNET] Desconectado
+2026-01-30 10:23:47,929 [INFO] Resultado Getnet: failed
+2026-01-30 10:23:47,929 [INFO] Worker completó: tx=1517a0f4-9df3-448f-8e07-690af1c8a674, estado=RECHAZADO
+2026-01-30 10:23:47,929 [INFO] Respuesta Getnet: tx=1517a0f4-9df3-448f-8e07-690af1c8a674, estado=RECHAZADO, tiempo=5.23s
+2026-01-30 10:25:26,153 [INFO] Recibida señal 2. Limpiando lock y saliendo.
+2026-01-30 10:25:26,154 [INFO] Lock file eliminado: pos_gateway.lock
+2026-01-30 10:25:31,615 [INFO] Logger inicializado
+2026-01-30 10:25:31,669 [INFO] SDK Transbank importado correctamente
+2026-01-30 10:25:31,669 [INFO] TRANSBANK_AVAILABLE = True
+2026-01-30 10:25:32,061 [INFO] Iniciando aplicación...
+2026-01-30 10:25:32,062 [INFO] Lock file creado: pos_gateway.lock (PID=13404)
+2026-01-30 10:25:32,062 [INFO] Verificando reglas de firewall para el puerto 5005...
+2026-01-30 10:25:32,227 [WARNING] Error creando regla inbound: 
+2026-01-30 10:25:32,387 [WARNING] Error creando regla outbound: 
+2026-01-30 10:25:32,388 [INFO] Reglas de firewall listas para el puerto 5005
+2026-01-30 10:25:32,388 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:25:32,388 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:25:32,398 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:25:32,398 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:25:34,228 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:25:34,603 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:25:34,604 [WARNING] Getnet habilitado pero no se detectó puerto
+2026-01-30 10:25:34,634 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4'] | Preferidos: COM6,COM7,COM8
+2026-01-30 10:25:34,634 [INFO] Probando puerto COM7...
+2026-01-30 10:25:34,638 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-30 10:25:34,852 [INFO] ✓ POS detectado en COM7
+2026-01-30 10:25:34,852 [INFO] ✓ Transbank detectado en COM7
+2026-01-30 10:25:34,853 [INFO] Monitor POS iniciado (modo inteligente)
+2026-01-30 10:25:34,854 [INFO] Puertos asignados: {'transbank': 'COM7', 'getnet': None}
+2026-01-30 10:25:34,878 [INFO] Agente local registrado 70/caja_10
+2026-01-30 10:25:34,878 [INFO] Local worker iniciado
+2026-01-30 10:25:34,878 [INFO] Local worker thread iniciado
+2026-01-30 10:25:34,879 [INFO] Tarea de limpieza automática iniciada
+2026-01-30 10:25:34,879 [INFO] APIServer inicializado
+2026-01-30 10:25:34,880 [INFO] Servidor Flask arrancando en puerto 5005
+2026-01-30 10:25:34,881 [INFO] Thread de icono de bandeja iniciado
+2026-01-30 10:25:34,899 [INFO] Notificación Archivo de inicio mostrada
+2026-01-30 10:25:34,903 [INFO] Iniciando icono de bandeja del sistema...
+2026-01-30 10:25:40,210 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:25:40,211 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:25:40,211 [INFO] Timeout Getnet: 60 segundos
+2026-01-30 10:25:50,332 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:25:50,332 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:25:50,333 [INFO] Timeout Getnet: 60 segundos
+2026-01-30 10:25:53,739 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:25:53,739 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:25:53,739 [INFO] Timeout Getnet: 60 segundos
+2026-01-30 10:26:04,208 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=getnet
+2026-01-30 10:26:04,209 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:26:04,209 [INFO] Timeout Getnet: 60 segundos
+2026-01-30 10:26:04,209 [INFO] Tarea Getnet encolada: tx=58b538b2-c9b5-402d-a993-a96e1328ab4a
+2026-01-30 10:26:04,209 [INFO] Procesando: tx=58b538b2-c9b5-402d-a993-a96e1328ab4a, tipo=getnet, timeout=60
+2026-01-30 10:26:04,209 [INFO] [GETNET] Iniciando venta: $1000
+2026-01-30 10:26:04,209 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:26:04,209 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:26:04,219 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:26:04,219 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:26:06,105 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:26:06,485 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:26:06,485 [INFO] [GETNET] Conectando a COM5...
+2026-01-30 10:26:07,492 [INFO] [GETNET] ✓ Conectado a COM5
+2026-01-30 10:26:07,996 [INFO] [GETNET] Esperando usuario en POS...
+2026-01-30 10:26:11,886 [WARNING] [GETNET] Venta CANCELADA por usuario
+2026-01-30 10:26:11,886 [INFO] [GETNET] Desconectado
+2026-01-30 10:26:11,886 [INFO] Resultado Getnet: failed
+2026-01-30 10:26:11,887 [INFO] Worker completó: tx=58b538b2-c9b5-402d-a993-a96e1328ab4a, estado=RECHAZADO
+2026-01-30 10:26:11,887 [INFO] Respuesta Getnet: tx=58b538b2-c9b5-402d-a993-a96e1328ab4a, estado=RECHAZADO, tiempo=7.68s
+2026-01-30 10:26:13,600 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:26:13,600 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:26:13,600 [INFO] Tarea encolada: tx=02ce7fc7-a5b7-45cd-95b2-75e4fd8f5b70, timeout=60, local=True
+2026-01-30 10:26:13,600 [INFO] Procesando: tx=02ce7fc7-a5b7-45cd-95b2-75e4fd8f5b70, tipo=transbank, timeout=60
+2026-01-30 10:26:13,602 [INFO] Venta POS -> puerto=COM7 monto=100 ticket=102613
+2026-01-30 10:26:16,035 [INFO] Respuesta POS: {'function_code': 210, 'response_code': '07', 'response_message': 'Transacción Cancelada desde el POS', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'ticket': '102613', 'authorization_code': '', 'amount': '100', 'shares_number': '', 'shares_amount': '', 'last_4_digits': '', 'operation_number': '', 'card_type': '', 'accounting_date': '', 'account_number': '', 'card_brand': '', 'real_date': '', 'real_time': '', 'employee_id': '', 'tip': ''}
+2026-01-30 10:26:16,051 [INFO] Resultado Transbank: failed
+2026-01-30 10:26:16,052 [INFO] Worker completó: tx=02ce7fc7-a5b7-45cd-95b2-75e4fd8f5b70, estado=RECHAZADO
+2026-01-30 10:26:16,052 [INFO] Respuesta: tx=02ce7fc7-a5b7-45cd-95b2-75e4fd8f5b70, estado=RECHAZADO, tiempo=2.45s
+2026-01-30 10:26:20,532 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:26:20,532 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:26:20,533 [INFO] Tarea encolada: tx=d6cfd5b4-0c66-4536-a8b1-dbdc086683e5, timeout=60, local=True
+2026-01-30 10:26:20,533 [INFO] Procesando: tx=d6cfd5b4-0c66-4536-a8b1-dbdc086683e5, tipo=transbank, timeout=60
+2026-01-30 10:26:20,535 [INFO] Venta POS -> puerto=COM7 monto=100 ticket=102620
+2026-01-30 10:26:23,796 [INFO] Respuesta POS: {'function_code': 210, 'response_code': '07', 'response_message': 'Transacción Cancelada desde el POS', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'ticket': '102620', 'authorization_code': '', 'amount': '100', 'shares_number': '', 'shares_amount': '', 'last_4_digits': '', 'operation_number': '', 'card_type': '', 'accounting_date': '', 'account_number': '', 'card_brand': '', 'real_date': '', 'real_time': '', 'employee_id': '', 'tip': ''}
+2026-01-30 10:26:23,810 [INFO] Resultado Transbank: failed
+2026-01-30 10:26:23,811 [INFO] Worker completó: tx=d6cfd5b4-0c66-4536-a8b1-dbdc086683e5, estado=RECHAZADO
+2026-01-30 10:26:23,811 [INFO] Respuesta: tx=d6cfd5b4-0c66-4536-a8b1-dbdc086683e5, estado=RECHAZADO, tiempo=3.28s
+2026-01-30 10:26:35,779 [INFO] Re-detectando POS...
+2026-01-30 10:26:35,787 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4'] | Preferidos: COM6,COM7,COM8
+2026-01-30 10:26:35,787 [INFO] Probando puerto COM7...
+2026-01-30 10:26:35,789 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-30 10:26:35,996 [INFO] ✓ POS detectado en COM7
+2026-01-30 10:31:00,170 [INFO] Recibida señal 2. Limpiando lock y saliendo.
+2026-01-30 10:31:00,170 [INFO] Lock file eliminado: pos_gateway.lock
+2026-01-30 10:31:03,550 [INFO] Logger inicializado
+2026-01-30 10:31:03,605 [INFO] SDK Transbank importado correctamente
+2026-01-30 10:31:03,605 [INFO] TRANSBANK_AVAILABLE = True
+2026-01-30 10:31:04,004 [INFO] Iniciando aplicación...
+2026-01-30 10:31:04,005 [INFO] Lock file creado: pos_gateway.lock (PID=14544)
+2026-01-30 10:31:04,005 [INFO] Verificando reglas de firewall para el puerto 5005...
+2026-01-30 10:31:04,163 [WARNING] Error creando regla inbound: 
+2026-01-30 10:31:04,330 [WARNING] Error creando regla outbound: 
+2026-01-30 10:31:04,330 [INFO] Reglas de firewall listas para el puerto 5005
+2026-01-30 10:31:04,330 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:31:04,330 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:31:04,341 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:31:04,341 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:31:06,186 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:31:06,565 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:31:06,565 [WARNING] Getnet habilitado pero no se detectó puerto
+2026-01-30 10:31:06,583 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4'] | Preferidos: COM6,COM7,COM8
+2026-01-30 10:31:06,584 [INFO] Probando puerto COM7...
+2026-01-30 10:31:06,587 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-30 10:31:07,005 [INFO] ✓ POS detectado en COM7
+2026-01-30 10:31:07,006 [INFO] ✓ Transbank detectado en COM7
+2026-01-30 10:31:07,006 [INFO] Monitor POS iniciado (modo inteligente)
+2026-01-30 10:31:07,006 [INFO] Puertos asignados: {'transbank': 'COM7', 'getnet': None}
+2026-01-30 10:31:07,019 [INFO] Agente local registrado 70/caja_10
+2026-01-30 10:31:07,020 [INFO] Local worker iniciado
+2026-01-30 10:31:07,020 [INFO] Local worker thread iniciado
+2026-01-30 10:31:07,021 [INFO] Tarea de limpieza automática iniciada
+2026-01-30 10:31:07,021 [INFO] APIServer inicializado
+2026-01-30 10:31:07,022 [INFO] Servidor Flask arrancando en puerto 5005
+2026-01-30 10:31:07,022 [INFO] Thread de icono de bandeja iniciado
+2026-01-30 10:31:07,039 [INFO] Notificación Archivo de inicio mostrada
+2026-01-30 10:31:07,042 [INFO] Iniciando icono de bandeja del sistema...
+2026-01-30 10:31:11,832 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:31:11,832 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:31:11,832 [INFO] Timeout Transbank: 60 segundos
+2026-01-30 10:31:20,280 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:31:20,281 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:31:20,281 [INFO] Timeout Transbank: 60 segundos
+2026-01-30 10:31:24,871 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:31:24,871 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:31:24,871 [INFO] Timeout Transbank: 60 segundos
+2026-01-30 10:31:35,495 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:31:35,496 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:31:35,496 [INFO] Timeout Transbank: 60 segundos
+2026-01-30 10:31:35,496 [WARNING] Caja ocupada: 70/caja_10
+2026-01-30 10:32:18,654 [INFO] Recibida señal 2. Limpiando lock y saliendo.
+2026-01-30 10:32:18,656 [INFO] Lock file eliminado: pos_gateway.lock
+2026-01-30 10:32:20,531 [INFO] Logger inicializado
+2026-01-30 10:32:20,589 [INFO] SDK Transbank importado correctamente
+2026-01-30 10:32:20,589 [INFO] TRANSBANK_AVAILABLE = True
+2026-01-30 10:32:20,965 [INFO] Iniciando aplicación...
+2026-01-30 10:32:20,965 [INFO] Lock file creado: pos_gateway.lock (PID=11200)
+2026-01-30 10:32:20,966 [INFO] Verificando reglas de firewall para el puerto 5005...
+2026-01-30 10:32:21,120 [WARNING] Error creando regla inbound: 
+2026-01-30 10:32:21,298 [WARNING] Error creando regla outbound: 
+2026-01-30 10:32:21,298 [INFO] Reglas de firewall listas para el puerto 5005
+2026-01-30 10:32:21,298 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:32:21,298 [INFO] [GETNET] Buscando puerto automáticamente...
+2026-01-30 10:32:21,309 [INFO] [GETNET] Puertos disponibles: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4']
+2026-01-30 10:32:21,309 [INFO] [GETNET] Probando COM3 (prioridad: 60)...
+2026-01-30 10:32:23,154 [INFO] [GETNET] Probando COM5 (prioridad: 60)...
+2026-01-30 10:32:23,527 [INFO] [GETNET] ✓ Puerto encontrado: COM5
+2026-01-30 10:32:23,527 [WARNING] Getnet habilitado pero no se detectó puerto
+2026-01-30 10:32:23,543 [INFO] Puertos detectados: ['COM3', 'COM5', 'COM1', 'COM7', 'COM4'] | Preferidos: COM6,COM7,COM8
+2026-01-30 10:32:23,543 [INFO] Probando puerto COM7...
+2026-01-30 10:32:23,548 [INFO] Puerto COM7 abierto, ejecutando poll...
+2026-01-30 10:32:23,763 [INFO] ✓ POS detectado en COM7
+2026-01-30 10:32:23,763 [INFO] ✓ Transbank detectado en COM7
+2026-01-30 10:32:23,764 [INFO] Monitor POS iniciado (modo inteligente)
+2026-01-30 10:32:23,764 [INFO] Puertos asignados: {'transbank': 'COM7', 'getnet': None}
+2026-01-30 10:32:23,775 [INFO] Agente local registrado 70/caja_10
+2026-01-30 10:32:23,776 [INFO] Local worker iniciado
+2026-01-30 10:32:23,776 [INFO] Local worker thread iniciado
+2026-01-30 10:32:23,777 [INFO] Tarea de limpieza automática iniciada
+2026-01-30 10:32:23,777 [INFO] APIServer inicializado
+2026-01-30 10:32:23,777 [INFO] Servidor Flask arrancando en puerto 5005
+2026-01-30 10:32:23,778 [INFO] Thread de icono de bandeja iniciado
+2026-01-30 10:32:23,787 [INFO] Notificación Archivo de inicio mostrada
+2026-01-30 10:32:23,790 [INFO] Iniciando icono de bandeja del sistema...
+2026-01-30 10:32:27,833 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:32:27,833 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:32:27,833 [INFO] Timeout Transbank: 60 segundos
+2026-01-30 10:32:27,834 [INFO] Tarea encolada: tx=32df1024-b942-4eac-89a2-91b6b7066996, timeout=60, local=True
+2026-01-30 10:32:27,834 [INFO] Procesando: tx=32df1024-b942-4eac-89a2-91b6b7066996, tipo=transbank, timeout=60
+2026-01-30 10:32:27,836 [INFO] Venta POS -> puerto=COM7 monto=100 ticket=103227
+2026-01-30 10:32:30,677 [INFO] Respuesta POS: {'function_code': 210, 'response_code': '07', 'response_message': 'Transacción Cancelada desde el POS', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'ticket': '103227', 'authorization_code': '', 'amount': '100', 'shares_number': '', 'shares_amount': '', 'last_4_digits': '', 'operation_number': '', 'card_type': '', 'accounting_date': '', 'account_number': '', 'card_brand': '', 'real_date': '', 'real_time': '', 'employee_id': '', 'tip': ''}
+2026-01-30 10:32:30,692 [INFO] Resultado Transbank: failed
+2026-01-30 10:32:30,692 [INFO] Worker completó: tx=32df1024-b942-4eac-89a2-91b6b7066996, estado=RECHAZADO
+2026-01-30 10:32:30,693 [INFO] Respuesta: tx=32df1024-b942-4eac-89a2-91b6b7066996, estado=RECHAZADO, tiempo=2.86s
+2026-01-30 10:32:36,759 [INFO] [HTTP /pago] Petición: id_sucursal=None, nombre_caja=None, type=None
+2026-01-30 10:32:43,627 [INFO] [HTTP /pago] Petición: id_sucursal=70, nombre_caja=caja_10, type=transbank
+2026-01-30 10:32:43,628 [INFO] Timeout personalizado: 60 segundos
+2026-01-30 10:32:43,628 [INFO] Timeout Transbank: 60 segundos
+2026-01-30 10:32:43,628 [INFO] Tarea encolada: tx=c169a46c-c176-40b2-bad0-556bb0a0e556, timeout=60, local=True
+2026-01-30 10:32:43,628 [INFO] Procesando: tx=c169a46c-c176-40b2-bad0-556bb0a0e556, tipo=transbank, timeout=60
+2026-01-30 10:32:43,630 [INFO] Venta POS -> puerto=COM7 monto=100 ticket=103243
+2026-01-30 10:32:46,277 [INFO] Respuesta POS: {'function_code': 210, 'response_code': '07', 'response_message': 'Transacción Cancelada desde el POS', 'success': False, 'commerce_code': '597029414300', 'terminal_id': 'IT750866', 'ticket': '103243', 'authorization_code': '', 'amount': '100', 'shares_number': '', 'shares_amount': '', 'last_4_digits': '', 'operation_number': '', 'card_type': '', 'accounting_date': '', 'account_number': '', 'card_brand': '', 'real_date': '', 'real_time': '', 'employee_id': '', 'tip': ''}
+2026-01-30 10:32:46,294 [INFO] Resultado Transbank: failed
+2026-01-30 10:32:46,295 [INFO] Worker completó: tx=c169a46c-c176-40b2-bad0-556bb0a0e556, estado=RECHAZADO
+2026-01-30 10:32:46,295 [INFO] Respuesta: tx=c169a46c-c176-40b2-bad0-556bb0a0e556, estado=RECHAZADO, tiempo=2.67s
