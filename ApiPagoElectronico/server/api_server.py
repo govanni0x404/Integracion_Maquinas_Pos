@@ -430,11 +430,11 @@ class APIServer:
             if id_sucursal != str(ID_SUCURSAL) or nombre_caja != str(NOMBRE_CAJA):
                 return jsonify({
                     "status": "forbidden",
-                    "message": f"El id_sucursal y el nombre_caja no coinciden con la configuración de esta máquina"
+                    "message": f"El id_sucursal y/o el nombre_caja no coinciden con las credenciales de las configuraciones."
                 }), 403
 
             if not id_sucursal or not nombre_caja or not pos_type:
-                return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
+                return jsonify({"error": "Es necesario el id_sucursal, nombre_caja y el tipo(type) de pos"}), 400
 
             is_local = (id_sucursal == str(ID_SUCURSAL) and nombre_caja == str(NOMBRE_CAJA))
 
@@ -463,11 +463,11 @@ class APIServer:
                 
                 # Validaciones obligatorias
                 if terminal_id is None:
-                    return jsonify({"error": "terminal_id requerido para Getnet"}), 400
+                    return jsonify({"error": "Es necesario el terminal_id de Getnet"}), 400
                 if amount is None:
-                    return jsonify({"error": "amount requerido"}), 400
+                    return jsonify({"error": "Es necesario el motno de venta de Getnet"}), 400
                 if custom_timeout is None:
-                    return jsonify({"error": "timeout requerido para Getnet"}), 400
+                    return jsonify({"error": "Es necesario el timeout de Getnet"}), 400
                 
                 # Validar rango de timeout
                 try:
@@ -481,7 +481,7 @@ class APIServer:
                 if terminal_id != ID_TERMINAL:
                     return jsonify({
                         "status": "forbidden",
-                        "message": f"El terminal_id no coincide con la configuración de esta máquina"
+                        "message": f"El terminal_id no coincide con las credenciales de configuración"
                     }), 403
                 
                 key = (id_sucursal, nombre_caja)
@@ -562,11 +562,11 @@ class APIServer:
                 
                 #validaciones obligatorias
                 if terminal_id_transbank is None:
-                    return jsonify({"error": "terminal_id requerido para Transbank"}), 400
+                    return jsonify({"error": "Es necesario el terminal_id de Transbank"}), 400
                 if amount_transbank is None:
-                    return jsonify({"error": "amount requerido"}), 400
+                    return jsonify({"error": "Es necesario el monto de venta de Transbank"}), 400
                 if timeout_transbank is None:
-                    return jsonify({"error": "timeout requerido para Transbank"}), 400
+                    return jsonify({"error": "Es necesario el timeout de Transbank"}), 400
 
                 #validar rango de timeout
                 try:
@@ -580,7 +580,7 @@ class APIServer:
                 if terminal_id_transbank != ID_TERMINAL:
                     return jsonify({
                         "status": "forbidden",
-                        "message": f"El terminal_id no coincide con la configuración de esta máquina"
+                        "message": f"El terminal_id no coincide con las credenciales de configuración"
                     }), 403
 
                 key = (id_sucursal, nombre_caja)
@@ -655,8 +655,12 @@ class APIServer:
                 terminal_id = data.get("terminal_id", ID_TERMINAL)
                 access_token = data.get("access_token")
                 amount = data.get("amount")
-                if access_token is None or amount is None:
-                    return jsonify({"error": "Faltan campos mercadopago"}), 400
+                if access_token is None or access_token == "":
+                    return jsonify({"error": "Es necesario el access_token de mercado pago"}), 400
+                if amount is None or amount == 0:
+                    return jsonify({"error": "Es necesario el monto de venta"}), 400
+                if terminal_id is None or terminal_id == "":
+                    return jsonify({"error": "Es necesario el terminal_id de mercado pago"}), 400
 
                 res = process_mercadopago(terminal_id, access_token, amount, timeout=timeout)
                 return jsonify(res), 200
