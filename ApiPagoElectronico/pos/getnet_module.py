@@ -72,6 +72,8 @@ class GetnetModule:
             
             if self._test_port_connection(port_name):
                 logger.info(f"[GETNET] ✓ Puerto encontrado: {port_name}")
+                self.port = port_name
+                self._port_cache = port_name
                 return port_name
         
         logger.warning("[GETNET] No se encontró puerto Getnet funcional")
@@ -92,7 +94,7 @@ class GetnetModule:
                 dsrdtr=False
             )
             
-            time.sleep(0.3)
+            time.sleep(0.1)
             test_connection.reset_output_buffer()
             test_connection.reset_input_buffer()
             
@@ -168,7 +170,7 @@ class GetnetModule:
                 dsrdtr=False
             )
             
-            time.sleep(1)
+            time.sleep(0.2)
             self.serial_connection.reset_output_buffer()
             
             logger.info(f"[GETNET] ✓ Conectado a {self.port}")
@@ -233,6 +235,9 @@ class GetnetModule:
             return False
         
         try:
+            self.serial_connection.reset_input_buffer()
+            self.serial_connection.reset_output_buffer()
+            
             json_str = json.dumps(command_data, separators=(',', ':'))
             
             message = {
@@ -245,7 +250,7 @@ class GetnetModule:
             self.serial_connection.write(message_bytes)
             self.serial_connection.flush()
             
-            time.sleep(0.5)
+            time.sleep(0.05)
             return True
             
         except Exception as e:
@@ -271,10 +276,10 @@ class GetnetModule:
                         return response
                 
                 if buffer.strip() in ('D', 'DD'):
-                    time.sleep(0.2)
+                    time.sleep(0.05)
                     continue
                 
-                time.sleep(0.1)
+                time.sleep(0.02)
                 
             except Exception as e:
                 logger.error(f"[GETNET] Error leyendo: {e}")
@@ -339,10 +344,10 @@ class GetnetModule:
         
         except Exception as e:
             logger.error(f"[GETNET] Error en venta: {e}")
+            self.disconnect()
             return {"status": "error", "message": str(e)}
         
-        finally:
-            self.disconnect()
+        # Eliminado finally: self.disconnect() para mantener conexión abierta y ser más rápido
     
     def get_current_port(self):
         """Obtener puerto actual"""

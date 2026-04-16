@@ -15,3 +15,14 @@ transbank-pos-sdk==1.0.1
 # Saber que usa y requiere el programa  "pip freeze > requirements.txt"
 # Usar  "pip install -r requirements.txt" para instalar todo
 #pip install transbank-pos-sdk
+
+#sudo apt install python3-venv
+#python3 -m venv venv
+#source venv/bin/activate
+#pip install -r requirements.txt
+
+#rm -rf venv
+#python3 -m venv venv --copies
+#source venv/bin/activate
+#pip install --upgrade pip
+#pip install -r requirements.txt

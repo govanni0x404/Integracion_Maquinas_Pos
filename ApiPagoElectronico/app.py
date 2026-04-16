@@ -33,11 +33,9 @@ def main():
         try:
             getnet_module = GetnetModule()
             detected_port = getnet_module._find_getnet_port()
-            if getnet_module.port:
-                #detected_ports["getnet"] = getnet_module.port
-                getnet_module.port = detected_port
+            if detected_port:
                 detected_ports["getnet"] = detected_port
-                logger.info(f"Getnet detectado en {getnet_module.port}")
+                logger.info(f"Getnet detectado en {detected_port}")
             else:
                 logger.warning("Getnet habilitado pero no se detectó puerto")
         except Exception as e:
