@@ -20,10 +20,8 @@ def main():
         logger.info(f"Verificando reglas de firewall para el puerto {HTTP_PORT}...")
         open_firewall_port(HTTP_PORT)
         logger.info(f"Reglas de firewall listas para el puerto {HTTP_PORT}")
-    except PermissionError:
-        logger.warning("No se tienen permisos de administrador para modificar el firewall.")
-    except Exception as e:
-        logger.exception("Error al abrir puerto en firewall: %s", e)
+    except Exception:
+        logger.exception("No se pudo configurar firewall")
 
     detected_ports = {"transbank": None, "getnet": None}
     
