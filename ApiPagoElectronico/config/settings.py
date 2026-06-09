@@ -1,137 +1,211 @@
 import os
-import socket
 import sys
-import threading
+import socket
 from pathlib import Path
 
-from dotenv import load_dotenv
+# Credenciales API — valores SIEMPRE hardcodeados en el código, nunca del .env
+API_AUTH_USER = "DATAMAULE"
+API_AUTH_PASS = "TpiyC0iuezhnP2r355OL0X3C8jkVqC"
 
-_ENV_LOCK = threading.Lock()
-_ENV_MTIME = None
+# Claves que NUNCA se leen del .env — siempre hardcodeadas en el código
+_ENV_PROTECTED_KEYS = {"API_AUTH_USER", "API_AUTH_PASS"}
 
-
-def get_base_dir() -> Path:
-    return Path(sys.argv[0]).resolve().parent
-
-
-def get_env_path() -> Path:
-    base_candidate = get_base_dir() / ".env"
-    if base_candidate.exists():
-        return base_candidate
-    cwd_candidate = Path.cwd() / ".env"
-    return cwd_candidate
-
-
-def _load_env_if_needed(force: bool) -> None:
-    global _ENV_MTIME
-    env_path = get_env_path()
-    if not env_path.exists():
-        return
+def _parse_env_file(path: str) -> dict:
+    """Parser minimo de .env — no requiere el modulo dotenv."""
+    result = {}
     try:
-        mtime = env_path.stat().st_mtime
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                # Ignorar claves protegidas
+                if key in _ENV_PROTECTED_KEYS:
+                    continue
+                value = value.strip()
+                # Quitar comillas simples o dobles
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
+                result[key] = value
     except Exception:
-        return
+        pass
+    return result
 
-    with _ENV_LOCK:
-        if not force and _ENV_MTIME is not None and _ENV_MTIME == mtime:
+def _find_and_load_dotenv():
+    """
+    Busca el .env en el orden correcto para PyInstaller y desarrollo.
+    Usa dotenv si esta disponible, sino un parser propio.
+    """
+    candidates = []
+
+    # 1. Junto al ejecutable (PyInstaller onefile/onedir)
+    try:
+        exe_dir = Path(sys.executable).parent
+        for folder in [exe_dir, exe_dir.parent, exe_dir.parent.parent, exe_dir.parent.parent.parent]:
+            env_path = folder / ".env"
+            if env_path.exists():
+                candidates.append(env_path)
+                break
+    except Exception:
+        pass
+
+    # 2. Junto al archivo .py (modo desarrollo)
+    try:
+        script_dir = Path(__file__).parent.parent
+        env_path = script_dir / ".env"
+        if env_path.exists():
+            candidates.append(env_path)
+    except Exception:
+        pass
+
+    # 3. CWD
+    cwd_env = Path(os.getcwd()) / ".env"
+    if cwd_env.exists():
+        candidates.append(cwd_env)
+
+    if not candidates:
+        try:
+            exe_dir = Path(sys.executable).parent
+            target_dir = exe_dir
+            parts = exe_dir.parts
+            if "Contents" in parts and "MacOS" in parts:
+                target_dir = exe_dir.parent.parent.parent
+            env_path = target_dir / ".env"
+            if not env_path.exists():
+                default_env = "\n".join([
+                    "HTTP_PORT=5005",
+                    "ID_SUCURSAL=1",
+                    "NOMBRE_CAJA=",
+                    "TERMINAL_ID=",
+                    "USAR_POS_FISICO=true",
+                    "PUERTOS_COM=COM5,COM6,COM7,COM8",
+                    "USAR_GETNET=false",
+                    "MAX_TRANSACTION_TIME=90",
+                    "TIMEOUT_SERVER=120",
+                    "ALLOWED_ORIGINS=",
+                    "ALLOWED_MP=",
+                    "MP_API_URL=https://api.mercadopago.com/v1/orders",
+                    "MP_ACCESS_TOKEN=",
+                    "MP_TERMINAL_ID=",
+                    "ALLOW_MP_TOKEN_IN_REQUEST=false",
+                    "",
+                ])
+                env_path.write_text(default_env, encoding="utf-8")
+            candidates.append(env_path)
+        except Exception:
             return
-        load_dotenv(dotenv_path=env_path, override=True)
-        _ENV_MTIME = mtime
 
+    chosen = candidates[0]
+    os.chdir(chosen.parent)
 
-def ensure_env_loaded() -> None:
-    _load_env_if_needed(force=False)
-
-
-def reload_env() -> None:
-    _load_env_if_needed(force=True)
-    refresh_settings()
-
-
-def _env_str(key: str, default: str = "") -> str:
-    ensure_env_loaded()
-    val = os.environ.get(key)
-    if val is None:
-        return default
-    return str(val)
-
-
-def _env_int(key: str, default: int) -> int:
-    ensure_env_loaded()
-    raw = os.environ.get(key)
-    if raw is None or raw == "":
-        return default
+    # Intentar con dotenv (desarrollo), sino usar parser propio (compilado)
+    _env_loaded_with = None
     try:
-        return int(raw)
-    except Exception:
-        return default
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=str(chosen), override=True)
+        _env_loaded_with = "python-dotenv"
+    except ImportError:
+        for key, value in _parse_env_file(str(chosen)).items():
+            os.environ.setdefault(key, value)
+        _env_loaded_with = "parser-propio"
+
+    # Garantía final: eliminar claves protegidas del entorno aunque el .env
+    # las haya cargado. Las credenciales siempre vienen del código, nunca del .env.
+    _removed = []
+    for _k in _ENV_PROTECTED_KEYS:
+        if os.environ.pop(_k, None) is not None:
+            _removed.append(_k)
+
+    # Guardar info de diagnóstico para el log posterior
+    global _dotenv_info
+    _dotenv_info = {
+        "path": str(chosen),
+        "loader": _env_loaded_with,
+        "removed_from_env": _removed,
+    }
+
+_dotenv_info: dict = {}
+_find_and_load_dotenv()
+
+APP_NAME = os.environ.get("APP_NAME", " ApiPagoElectronico")
 
 
-def _env_bool(key: str, default: bool = False) -> bool:
-    ensure_env_loaded()
-    raw = os.environ.get(key)
-    if raw is None or raw == "":
-        return default
-    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
 
+# ── Log diagnóstico de credenciales (se escribe apenas el logger esté listo) ──
+def _log_auth_diagnostics():
+    """Llamar desde app.py DESPUES de que el logger esté inicializado."""
+    import logging
+    # Usar root logger para no depender del nombre exacto del logger configurado
+    log = logging.getLogger()  # root logger — siempre existe
 
-def _hostname_default() -> str:
+    lines = [
+        "[AUTH-DIAG] === Diagnóstico de credenciales ===",
+        f"[AUTH-DIAG] .env cargado desde: {_dotenv_info.get('path', 'ninguno')}",
+        f"[AUTH-DIAG] Método de carga .env: {_dotenv_info.get('loader', 'no se cargó .env')}",
+        f"[AUTH-DIAG] Claves en os.environ eliminadas: {_dotenv_info.get('removed_from_env', [])}",
+        f"[AUTH-DIAG] API_AUTH_USER final: '{API_AUTH_USER}'",
+        f"[AUTH-DIAG] API_AUTH_PASS final: '{API_AUTH_PASS[:4]}{'*' * (len(API_AUTH_PASS)-4)}'",
+        f"[AUTH-DIAG] API_AUTH_USER en os.environ ahora: '{os.environ.get('API_AUTH_USER', '(vacío=correcto)')}'" ,
+        "[AUTH-DIAG] ========================================",
+    ]
+
+    for line in lines:
+        if _dotenv_info.get('removed_from_env'):
+            log.warning(line)
+        else:
+            log.info(line)
+
+    # También escribir a un archivo de diagnóstico directo (no depende del logger)
     try:
-        return socket.gethostname()
+        diag_path = os.path.join(os.getcwd(), "auth_diag.log")
+        import datetime
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(diag_path, "a", encoding="utf-8") as f:
+            for line in lines:
+                f.write(f"{ts} {line}\n")
     except Exception:
-        return "caja"
+        pass
 
 
-def refresh_settings() -> None:
-    global APP_NAME
-    global LOG_FILE
-    global HTTP_PORT
-    global ID_SUCURSAL
-    global NOMBRE_CAJA
-    global ID_TERMINAL
-    global USAR_POS_FISICO
-    global PUERTOS_COM
-    global USAR_GETNET
-    global MAX_TRANSACTION_TIME
-    global TIMEOUT_SERVER
-    global ALLOWED_MP
-    global MP_API_URL
-    global API_AUTH_USER
-    global API_AUTH_PASS
+# Archivos
+LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
+LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
 
-    ensure_env_loaded()
+# Puerto HTTP
+HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5005")))
 
-    APP_NAME = _env_str("APP_NAME", "ApiPagoElectronico")
-    LOG_FILE = _env_str("LOG_FILE", str(get_base_dir() / "pos_gateway.log"))
+# Identificación
+ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
+NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
+ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
 
-    HTTP_PORT = _env_int("HTTP_PORT", 5005)
+# POS físico
+USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "true").lower() == "true"
+PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM5,COM6,COM7,COM8")
 
-    ID_SUCURSAL = _env_int("ID_SUCURSAL", 0)
+# Timeouts
+MAX_TRANSACTION_TIME = int(os.environ.get("MAX_TRANSACTION_TIME", "90"))
+TIMEOUT_SERVER = int(os.environ.get("TIMEOUT_SERVER", "120"))
 
-    NOMBRE_CAJA = _env_str("NOMBRE_CAJA", "").strip() or _hostname_default()
+# Mercado Pago
+ALLOWED_MP = set([x.strip() for x in os.environ.get("ALLOWED_MP", "").split(",") if x.strip()])
+MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders")
+MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN", "")
+MP_TERMINAL_ID = os.environ.get("MP_TERMINAL_ID", "")
+ALLOW_MP_TOKEN_IN_REQUEST = os.environ.get("ALLOW_MP_TOKEN_IN_REQUEST", "false").lower() == "true"
 
-    terminal_env = _env_str("TERMINAL_ID", "").strip() or _env_str("ID_TERMINAL", "").strip()
-    ID_TERMINAL = terminal_env or f"POS_{NOMBRE_CAJA}"
+_allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
+ALLOWED_ORIGINS = [x.strip() for x in _allowed_origins_raw.split(",") if x.strip()] or None
 
-    USAR_POS_FISICO = _env_bool("USAR_POS_FISICO", True)
+# GETNET POS
+# ¿Esta máquina tiene POS Getnet conectado?
+USAR_GETNET = os.environ.get("USAR_GETNET", "false").lower() == "true"
 
-    PUERTOS_COM = _env_str("PUERTOS_COM", "")
-
-    USAR_GETNET = _env_bool("USAR_GETNET", False)
-
-    MAX_TRANSACTION_TIME = _env_int("MAX_TRANSACTION_TIME", 90)
-    TIMEOUT_SERVER = _env_int("TIMEOUT_SERVER", 120)
-
-    allowed_raw = _env_str("ALLOWED_MP", "")
-    ALLOWED_MP = set([x.strip() for x in allowed_raw.split(",") if x.strip()])
-    MP_API_URL = _env_str("MP_API_URL", "https://api.mercadopago.com/v1/orders")
-
-    API_AUTH_USER = _env_str("API_AUTH_USER", "")
-    API_AUTH_PASS = _env_str("API_AUTH_PASS", "")
-
-
-refresh_settings()
-
+# Feature detection helpers (runtime)
 def is_flask_available() -> bool:
     try:
         import flask

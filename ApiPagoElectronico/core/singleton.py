@@ -1,6 +1,6 @@
 import os
 import sys  # ← AGREGAR ESTA LÍNEA
-import psutil
+import time
 import logging
 import atexit
 import signal
@@ -10,6 +10,96 @@ from typing import Optional
 
 logger = logging.getLogger(APP_NAME)
 LOCK_FILE = "pos_gateway.lock"
+
+try:
+    import psutil  # type: ignore
+    _PSUTIL_AVAILABLE = True
+except Exception:
+    psutil = None
+    _PSUTIL_AVAILABLE = False
+
+def _pid_exists(pid: int) -> bool:
+    if not pid:
+        return False
+    if _PSUTIL_AVAILABLE and psutil is not None:
+        try:
+            return psutil.pid_exists(pid)
+        except Exception:
+            return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, wintypes.DWORD(pid))
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+def _terminate_pid(pid: int, wait_seconds: float) -> bool:
+    if not pid:
+        return True
+    if _PSUTIL_AVAILABLE and psutil is not None:
+        try:
+            proc = psutil.Process(pid)
+            proc.terminate()
+            gone, alive = psutil.wait_procs([proc], timeout=wait_seconds)
+            if alive:
+                for p in alive:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+            return not _pid_exists(pid)
+        except Exception:
+            return not _pid_exists(pid)
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            PROCESS_TERMINATE = 0x0001
+            handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, wintypes.DWORD(pid))
+            if not handle:
+                return not _pid_exists(pid)
+            try:
+                kernel32.TerminateProcess(handle, 1)
+            finally:
+                kernel32.CloseHandle(handle)
+            start = time.time()
+            while time.time() - start < wait_seconds:
+                if not _pid_exists(pid):
+                    return True
+                time.sleep(0.2)
+            return not _pid_exists(pid)
+        except Exception:
+            return not _pid_exists(pid)
+    try:
+        os.kill(pid, signal.SIGTERM if hasattr(signal, "SIGTERM") else 15)
+    except Exception:
+        return not _pid_exists(pid)
+    start = time.time()
+    while time.time() - start < wait_seconds:
+        if not _pid_exists(pid):
+            return True
+        time.sleep(0.2)
+    try:
+        if hasattr(signal, "SIGKILL"):
+            os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
+    return not _pid_exists(pid)
 
 def _write_lock_for_current_pid():
     with open(LOCK_FILE, "w") as f:
@@ -26,11 +116,13 @@ def _read_lock_pid():
     return 0
 
 def _process_info(pid):
-    try:
-        p = psutil.Process(pid)
-        return p, f"{p.name()} (pid={pid})"
-    except Exception:
-        return None, f"(pid={pid})"
+    if _PSUTIL_AVAILABLE and psutil is not None:
+        try:
+            p = psutil.Process(pid)
+            return p, f"{p.name()} (pid={pid})"
+        except Exception:
+            return None, f"(pid={pid})"
+    return None, f"(pid={pid})"
 
 def _ask_yes_no(prompt: str, default: Optional[bool] = None) -> bool:
     """Pregunta sí/no. Si no hay terminal interactiva, usa el default."""
@@ -93,7 +185,7 @@ def ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=
         return True
 
     # Verifica si el proceso realmente existe
-    if not psutil.pid_exists(existing_pid):
+    if not _pid_exists(existing_pid):
         logger.info(f"Se encontró lock huérfano de un PID inexistente ({existing_pid}). Se sobreescribe.")
         _write_lock_for_current_pid()
         return True
@@ -111,25 +203,10 @@ def ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=
 
     # Intentar terminación ordenada
     try:
-        if proc is None:
-            # Sin handle del proceso, intentar señal genérica
-            os.kill(existing_pid, signal.SIGTERM if hasattr(signal, "SIGTERM") else 15)
-        else:
-            logger.info(f"Enviando terminate() a {label}...")
-            proc.terminate()
-
-        gone, alive = psutil.wait_procs([proc] if proc else [], timeout=wait_seconds)
-        if alive:
-            logger.warning(f"{label} no terminó en {wait_seconds}s. Forzando kill().")
-            for p in alive:
-                try:
-                    p.kill()
-                except Exception as e:
-                    logger.error(f"No se pudo forzar kill() a {p.pid}: {e}")
-        else:
-            logger.info(f"{label} terminado correctamente.")
-    except psutil.NoSuchProcess:
-        logger.info(f"El proceso {existing_pid} ya no existe.")
+        logger.info(f"Terminando instancia existente: {label}...")
+        ok = _terminate_pid(existing_pid, float(wait_seconds))
+        if not ok and _pid_exists(existing_pid):
+            logger.warning(f"{label} no terminó correctamente.")
     except PermissionError:
         logger.error("Permiso denegado para terminar el proceso existente. Ejecuta con privilegios adecuados.")
         return False
@@ -165,14 +242,21 @@ def _register_lock_cleanup_handlers():
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
-    for sig in (getattr(signal, "SIGINT", None),
-                getattr(signal, "SIGTERM", None),
-                getattr(signal, "SIGHUP", None)):
-        if sig is not None:
-            try:
-                signal.signal(sig, _handler)
-            except Exception:
-                pass
+    for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _handler)
+        except Exception:
+            pass
+
+    hup = getattr(signal, "SIGHUP", None)
+    if hup is not None:
+        try:
+            signal.signal(hup, signal.SIG_IGN)
+            logger.info("SIGHUP será ignorada para evitar cierres inesperados.")
+        except Exception:
+            pass
 
 # --- Compatibilidad con código existente ---
 def ensure_single_instance(stop_existing_default=None, wait_seconds=5):
