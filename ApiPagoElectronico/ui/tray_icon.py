@@ -12,7 +12,7 @@ import platform
 import subprocess
 from pathlib import Path
 from config.settings import APP_NAME, HTTP_PORT
-from core.logging_config import logger, LOG_FILE
+from core.logging_config import logger, current_log_file
 
 
 def _find_asset(filename: str) -> str | None:
@@ -161,12 +161,13 @@ if RUMPS_AVAILABLE:
             subprocess.Popen(["open", f"http://localhost:{HTTP_PORT}/status"])
 
         def _cb_ver_log(self, sender):
-            """Abre el log en Console.app o el editor de texto por defecto."""
+            """Abre el log de hoy en Console.app o el editor de texto por defecto."""
+            log_file = current_log_file()
             try:
-                subprocess.Popen(["open", "-a", "Console", LOG_FILE])
+                subprocess.Popen(["open", "-a", "Console", log_file])
             except Exception:
                 try:
-                    subprocess.Popen(["open", LOG_FILE])
+                    subprocess.Popen(["open", log_file])
                 except Exception as e:
                     logger.error("No se pudo abrir el log: %s", e)
 
@@ -283,10 +284,11 @@ def _run_pystray(pos_module):
                 subprocess.Popen(["xdg-open", f"http://localhost:{HTTP_PORT}/status"])
 
     def on_log(icon, item):
+        log_file = current_log_file()
         if IS_WINDOWS:
-            os.startfile(LOG_FILE)
+            os.startfile(log_file)
         else:
-            subprocess.Popen(["xdg-open", LOG_FILE])
+            subprocess.Popen(["xdg-open", log_file])
 
     def on_env(icon, item):
         env_path = _find_dotenv()

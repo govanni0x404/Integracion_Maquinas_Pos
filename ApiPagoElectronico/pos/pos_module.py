@@ -8,6 +8,7 @@ import serial
 import serial.tools.list_ports
 from pathlib import Path
 from config.settings import APP_NAME,PUERTOS_COM, USAR_POS_FISICO, MAX_TRANSACTION_TIME
+from core.business_logging import transbank_log, fmt_monto
 
 logger = logging.getLogger(APP_NAME)
 
@@ -125,6 +126,7 @@ class POSModule:
                         pass
 
                     logger.info("✓ POS detectado en %s", p)
+                    transbank_log.info(f"🔌 POS Transbank conectado — puerto {p}")
                     with self.lock:
                         self.current_port = p
                         self._is_online = True
@@ -144,6 +146,7 @@ class POSModule:
                     logger.debug("Error cerrando puerto %s: %s", p, ex)
 
         logger.warning("No se detectó POS en los puertos listados")
+        transbank_log.info("🔌 No se detectó ningún POS Transbank conectado en los puertos disponibles.")
         with self.lock:
             self.current_port = None
             self._is_online = False
@@ -192,28 +195,41 @@ class POSModule:
 
     def open_port_and_sale(self, port, amount):
         if not TRANSBANK_AVAILABLE:
+            transbank_log.info(f"❌ No se pudo vender: el SDK de Transbank no está disponible en esta instalación.")
             return {"status": "error", "message": "Transbank SDK no disponible"}
 
         pos = None
         try:
             pos = POSIntegrado()
+            transbank_log.info(f"🟢 Venta iniciada — monto {fmt_monto(amount)} — puerto {port}")
             if not pos.open_port(port):
+                transbank_log.info(f"❌ No se pudo abrir el puerto {port}. No se llegó a enviar nada al POS, es seguro reintentar.")
                 return {"status": "error", "message": f"No se pudo abrir {port}"}
 
             ticket = time.strftime("%H%M%S")
             logger.info("Venta POS -> puerto=%s monto=%s ticket=%s", port, amount, ticket)
+            transbank_log.info(f"⏳ Venta enviada al POS (ticket {ticket}), esperando que el cliente pague...")
 
             res = pos.sale(amount, ticket)
             logger.info("Respuesta POS: %s", res)
 
             if res.get("response_code") in ("0", "00"):
                 self.last_ok = time.time()
+                transbank_log.info(
+                    f"✅ Venta APROBADA — ticket {ticket} — monto {fmt_monto(amount)} — "
+                    f"autorización {res.get('authorization_code')}"
+                )
                 return {"status": "success", "response": res}
             else:
+                transbank_log.info(
+                    f"⛔ Venta RECHAZADA — ticket {ticket} — monto {fmt_monto(amount)} — "
+                    f"código {res.get('response_code')} — {res.get('response_message')}"
+                )
                 return {"status": "failed", "response": res}
 
         except Exception as e:
             logger.error("Error do_sale: %s\n%s", e, traceback.format_exc())
+            transbank_log.info(f"❌ Error inesperado durante la venta (puerto {port}, monto {fmt_monto(amount)}): {e}")
             return {"status": "error", "message": str(e)}
         finally:
             try:
@@ -228,6 +244,7 @@ class POSModule:
         port = self.get_current_port() or self.detect_port()
 
         if not port:
+            transbank_log.info(f"❌ Venta rechazada: no hay ningún POS Transbank conectado (monto {fmt_monto(amount)}).")
             return {"status": "error", "message": "No se detectó POS conectado"}
 
         result_queue = queue.Queue(maxsize=1)
@@ -245,6 +262,13 @@ class POSModule:
 
         if t.is_alive():
             logger.error("Timeout en venta POS")
+            # NOTA: la venta sigue corriendo en background (el hilo no se puede matar).
+            # Igual que puede pasar con Getnet, el cliente puede haber pagado en el POS
+            # sin que esta respuesta lo refleje — acá no se reconcilia automáticamente.
+            transbank_log.info(
+                f"⚠️ SIN CONFIRMACIÓN (timeout) — monto {fmt_monto(amount)} — puerto {port}. "
+                "La venta puede seguir procesándose en el POS: revisar manualmente si se cobró antes de reintentar."
+            )
             return {"status": "error", "message": "Timeout en venta POS"}
 
         try:
@@ -282,11 +306,13 @@ class POSModule:
                                     self._is_online = True
                             else:
                                 logger.warning("Puerto %s no responde, marcando offline", current)
+                                transbank_log.info(f"🔌 POS Transbank desconectado — el puerto {current} dejó de responder.")
                                 with self.lock:
                                     self.current_port = None
                                     self._is_online = False
                         except Exception as e:
                             logger.debug("Error verificando %s: %s", current, e)
+                            transbank_log.info(f"🔌 POS Transbank desconectado — puerto {current} dejó de responder ({e}).")
                             with self.lock:
                                 self.current_port = None
                                 self._is_online = False
@@ -331,7 +357,9 @@ class POSModule:
         pos = None
         try:
             pos = POSIntegrado()
+            transbank_log.info(f"🟡 Anulación solicitada — operación {operation_id} — puerto {port}")
             if not pos.open_port(port):
+                transbank_log.info(f"❌ No se pudo abrir el puerto {port} para anular la operación {operation_id}.")
                 return {"status": "error", "message": f"No se pudo abrir {port}"}
 
             logger.info("Anulación POS -> puerto=%s operation_id=%s", port, operation_id)
@@ -341,12 +369,17 @@ class POSModule:
 
             if res.get("response_code") in ("0", "00"):
                 self.last_ok = time.time()
+                transbank_log.info(f"✅ Anulación APROBADA — operación {operation_id}")
                 return {"status": "success", "response": res}
             else:
+                transbank_log.info(
+                    f"⛔ Anulación RECHAZADA — operación {operation_id} — código {res.get('response_code')}"
+                )
                 return {"status": "failed", "response": res}
 
         except Exception as e:
             logger.error("Error do_refund: %s\n%s", e, traceback.format_exc())
+            transbank_log.info(f"❌ Error inesperado anulando la operación {operation_id}: {e}")
             return {"status": "error", "message": str(e)}
         finally:
             try:
@@ -361,6 +394,7 @@ class POSModule:
         port = self.get_current_port() or self.detect_port()
 
         if not port:
+            transbank_log.info(f"❌ Anulación rechazada: no hay ningún POS Transbank conectado (operación {operation_id}).")
             return {"status": "error", "message": "No se detectó POS conectado"}
 
         result_queue = queue.Queue(maxsize=1)
@@ -378,6 +412,7 @@ class POSModule:
 
         if t.is_alive():
             logger.error("Timeout en anulación POS")
+            transbank_log.info(f"⚠️ SIN CONFIRMACIÓN (timeout) anulando la operación {operation_id} — puerto {port}.")
             return {"status": "error", "message": "Timeout en anulación POS"}
 
         try:
@@ -396,18 +431,22 @@ class POSModule:
                 return {"status": "error", "message": f"No se pudo abrir {port}"}
 
             logger.info("Obteniendo detalle POS -> puerto=%s, print_on_pos=%s", port, print_on_pos)
+            transbank_log.info(f"🔍 Consultando el detalle de la última transacción — puerto {port}")
 
             res = pos.details(print_on_pos)
             logger.info("Respuesta detalle POS: %s", res)
 
             if res.get("response_code") in ("0", "00"):
                 self.last_ok = time.time()
+                transbank_log.info(f"↪️ Detalle obtenido correctamente — puerto {port}")
                 return {"status": "success", "response": res}
             else:
+                transbank_log.info(f"↪️ No se pudo obtener el detalle — puerto {port} — código {res.get('response_code')}")
                 return {"status": "failed", "response": res}
 
         except Exception as e:
             logger.error("Error do_details: %s\n%s", e, traceback.format_exc())
+            transbank_log.info(f"❌ Error inesperado consultando el detalle (puerto {port}): {e}")
             return {"status": "error", "message": str(e)}
         finally:
             try:
@@ -423,6 +462,7 @@ class POSModule:
         port = self.get_current_port() or self.detect_port()
 
         if not port:
+            transbank_log.info("❌ Consulta de detalle rechazada: no hay ningún POS Transbank conectado.")
             return {"status": "error", "message": "No se detectó POS conectado"}
 
         result_queue = queue.Queue(maxsize=1)
@@ -440,6 +480,7 @@ class POSModule:
 
         if t.is_alive():
             logger.error("Timeout obteniendo detalle POS")
+            transbank_log.info("⚠️ Timeout consultando el detalle de la última transacción.")
             return {"status": "error", "message": "Timeout obteniendo detalle POS"}
 
         try:

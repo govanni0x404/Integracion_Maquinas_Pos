@@ -174,6 +174,7 @@ def _log_auth_diagnostics():
 # Archivos
 LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
 LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
+DB_FILE = os.environ.get("DB_FILE", "pos_gateway.db")
 
 # Puerto HTTP
 HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5005")))

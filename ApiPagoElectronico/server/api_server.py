@@ -28,6 +28,8 @@ from config.settings import (
 from server.auth import require_basic_auth
 from server.panel_html import PANEL_HTML
 from pos.pos_module import POSModule
+from core import transaction_store as tx_store
+from core.business_logging import getnet_log, transbank_log, mercadopago_log, fmt_monto
 
 
 logger = logging.getLogger(APP_NAME)
@@ -63,6 +65,7 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
     Retorna un dict con el resultado.
     """
     logger.info("Procesando MercadoPago terminal=%s monto=%s timeout=%s", terminal_id, amount, timeout)
+    mercadopago_log.info(f"🟢 Cobro iniciado — terminal {terminal_id} — monto {fmt_monto(amount)}")
 
     idempotency_key = idempotency_key or str(uuid.uuid4())
 
@@ -93,12 +96,18 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
 
         if status_code != 201:
             logger.warning("Error creando orden MP: %s %s", status_code, data_resp)
+            mercadopago_log.info(
+                f"❌ No se pudo crear la orden de cobro (terminal {terminal_id}, monto {fmt_monto(amount)}): "
+                f"Mercado Pago respondió HTTP {status_code} — {data_resp}"
+            )
             return {"status": "failed", "http_status": status_code, "response": data_resp}
 
         order_id = data_resp["id"]
         logger.info("Orden MP creada: %s; esperando resultado...", order_id)
+        mercadopago_log.info(f"⏳ Orden creada (id {order_id}) — esperando que el cliente pague en el terminal {terminal_id}...")
 
         start = time.time()
+        last_logged_status = None
         while time.time() - start < timeout:
             check_code, order_info = _http_json("GET", f"{MP_API_URL}/{order_id}", headers=headers, payload=None, timeout=10)
             status = order_info.get("status")
@@ -106,18 +115,31 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
             logger.info("Estado actual orden MP %s: %s -> %s", order_id, check_code, json.dumps(order_info, ensure_ascii=False))
 
             if status in ("created", "in_process", "at_terminal"):
+                if status != last_logged_status:
+                    mercadopago_log.info(f"↪️ Orden {order_id}: estado {status} (cliente aún no completa el pago)")
+                    last_logged_status = status
                 time.sleep(3)
                 continue
 
             logger.info("Orden %s finalizada con estado: %s", order_id, status)
             logger.info("Respuesta final MercadoPago: %s", json.dumps(order_info, ensure_ascii=False))
+            aprobado = status in ("approved", "success")
+            mercadopago_log.info(
+                f"{'✅' if aprobado else '⛔'} Cobro FINALIZADO — orden {order_id} — terminal {terminal_id} — "
+                f"monto {fmt_monto(amount)} — estado {status}"
+            )
             return {"status": status, "order_id": order_id, "response": order_info}
 
         logger.warning("Timeout esperando respuesta MP orden %s", order_id)
+        mercadopago_log.info(
+            f"⚠️ Se agotó el tiempo de espera del cobro — orden {order_id} — terminal {terminal_id}. "
+            "Estado desconocido: revisar manualmente en el portal de Mercado Pago antes de reintentar."
+        )
         return {"status": "timeout", "order_id": order_id}
 
     except Exception as e:
         logger.error("Error MercadoPago: %s\n%s", e, traceback.format_exc())
+        mercadopago_log.info(f"❌ Error inesperado procesando el cobro (terminal {terminal_id}, monto {fmt_monto(amount)}): {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -161,10 +183,14 @@ class APIServer:
         self.cleanup_thread = None
         self._stop_cleanup = threading.Event()
 
+        self.getnet_monitor_thread = None
+        self._stop_getnet_monitor = threading.Event()
+
         self.setup_routes()
         self.register_local_agent()
         self.start_local_worker()
         self.start_cleanup_task()
+        self.start_getnet_reconciliation_monitor()
 
         logger.info("APIServer inicializado")
 
@@ -240,8 +266,29 @@ class APIServer:
                             result = {"status": "error", "message": "Getnet no disponible"}
                         else:
                             amount = task.get("amount")
-                            result = self.getnet.do_sale_with_timeout(amount, timeout=custom_timeout)
+                            ticket = task.get("ticket")
+                            result = self.getnet.do_sale_with_timeout(amount, timeout=custom_timeout, ticket=ticket)
                             logger.info("Resultado Getnet: %s", result.get("status"))
+
+                            if result.get("status") == "indeterminada":
+                                # Puede que el cable ya se haya reconectado: intentamos
+                                # resolverlo de inmediato antes de dejarlo pendiente.
+                                recon = self.getnet.reconciliar_ticket(ticket, timeout=15)
+                                logger.info("Reconciliación Getnet tx=%s ticket=%s -> %s", tx_id, ticket, recon.get("status"))
+                                if recon.get("status") == "aprobado":
+                                    result = {"status": "success", "response": recon.get("response"), "ticket": ticket, "reconciliado": True}
+                                elif recon.get("status") == "rechazado":
+                                    result = {"status": "failed", "response": recon.get("response"), "ticket": ticket,
+                                              "reconciliado": True, "reconcile_message": recon.get("message")}
+                                else:
+                                    result["reconcile_message"] = recon.get("message")
+
+                            if tx_store.obtener(tx_id):
+                                estado_db = {
+                                    "success": "APROBADO", "approved": "APROBADO",
+                                    "error": "ERROR", "indeterminada": "INDETERMINADA",
+                                }.get(result.get("status"), "RECHAZADO")
+                                tx_store.actualizar_estado(tx_id, estado_db, raw_response=result)
                     elif tipo == "mercadopago":
                         terminal_id = task.get("terminal_id") or task.get("id_terminal") or MP_TERMINAL_ID or ID_TERMINAL
                         access_token = None
@@ -268,6 +315,8 @@ class APIServer:
                             entry["result"] = result
                             if result.get("status") in ("success", "approved"):
                                 entry["estado"] = "APROBADO"
+                            elif result.get("status") == "indeterminada":
+                                entry["estado"] = "INDETERMINADA"
                             elif result.get("status") == "error":
                                 entry["estado"] = "ERROR"
                             elif result.get("status") == "timeout":
@@ -288,6 +337,13 @@ class APIServer:
                                 self.tasks[tx_id]["result"] = {"status": "error", "message": str(e)}
                                 self.tasks[tx_id]["estado"] = "ERROR"
                                 self.tasks[tx_id]["event"].set()
+                        if tx_store.obtener(tx_id):
+                            tx_store.actualizar_estado(tx_id, "ERROR", raw_response={"status": "error", "message": str(e)})
+                        with self.busy_lock:
+                            self.busy_boxes.discard((task.get("id_sucursal"), task.get("nombre_caja")))
+                        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log, "mercadopago": mercadopago_log}.get(task.get("type"))
+                        if _tipo_log:
+                            _tipo_log.info(f"❌ Error interno inesperado procesando la venta (tx {tx_id}): {e}")
                     except Exception:
                         pass
 
@@ -335,6 +391,66 @@ class APIServer:
         except Exception:
             pass
         logger.info("Tarea de limpieza detenida")
+
+    # ---------- Monitor de reconciliación automática Getnet ----------
+    def start_getnet_reconciliation_monitor(self, interval=30):
+        """
+        Reintenta periódicamente resolver transacciones Getnet que quedaron
+        INDETERMINADA (comando enviado al POS, sin confirmación) usando Command 101
+        (Último Comprobante). No depende de is_online() para decidir cuándo intentar
+        —esa señal queda cacheada y no siempre refleja si el cable realmente volvió—
+        así que simplemente reintenta cada `interval` segundos hasta que el POS
+        conteste algo útil; el intento en sí (conectar + leer) es la prueba real de
+        si ya hay comunicación de nuevo.
+        """
+        if not self.getnet:
+            return
+
+        self._stop_getnet_monitor.clear()
+
+        def monitor():
+            logger.info("Monitor de reconciliación Getnet iniciado (cada %ss)", interval)
+            while not self._stop_getnet_monitor.wait(interval):
+                try:
+                    pendientes = [
+                        tx for tx in tx_store.listar_no_resueltas()
+                        if tx.get("tipo") == "getnet" and tx.get("estado") == "INDETERMINADA"
+                    ]
+                    for tx in pendientes:
+                        tx_id = tx["tx_id"]
+                        ticket = tx.get("ticket")
+                        getnet_log.info(
+                            f"🔁 Monitor automático: reintentando reconciliar el ticket {ticket} (tx {tx_id})..."
+                        )
+                        recon = self.getnet.reconciliar_ticket(ticket, timeout=15)
+                        estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
+                        nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
+
+                        if nuevo_estado == "INDETERMINADA":
+                            continue  # sigue sin poder confirmarse, se reintenta en el próximo ciclo
+
+                        tx_store.actualizar_estado(
+                            tx_id, nuevo_estado, raw_response=recon, nota=recon.get("message"),
+                            resuelto_por="monitor automático (Command 101)",
+                        )
+                        with self.busy_lock:
+                            self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+                        logger.info("Monitor Getnet: tx=%s reconciliada automáticamente -> %s", tx_id, nuevo_estado)
+                        getnet_log.info(f"✅ Monitor automático: ticket {ticket} (tx {tx_id}) reconciliado como {nuevo_estado}.")
+                except Exception as e:
+                    logger.error("Error en monitor de reconciliación Getnet: %s", e)
+
+        self.getnet_monitor_thread = threading.Thread(target=monitor, daemon=True, name="GetnetReconMonitor")
+        self.getnet_monitor_thread.start()
+
+    def stop_getnet_reconciliation_monitor(self):
+        self._stop_getnet_monitor.set()
+        try:
+            if self.getnet_monitor_thread:
+                self.getnet_monitor_thread.join(timeout=1)
+        except Exception:
+            pass
+        logger.info("Monitor de reconciliación Getnet detenido")
 
     # ---------- HTTP routes ----------
     def setup_routes(self):
@@ -448,6 +564,8 @@ class APIServer:
                 except Exception:
                     autostart_enabled = False
 
+            from core.logging_config import current_log_file
+
             return render_template_string(PANEL_HTML, **{
                 "app_name":      APP_NAME,
                 "http_port":     HTTP_PORT,
@@ -460,6 +578,7 @@ class APIServer:
                 "timeout":       TIMEOUT_SERVER,
                 "pos_port":      pos_port,
                 "env_path":      env_path or "no encontrado",
+                "log_path":      current_log_file(),
                 "env_vars":      env_vars_ui,
                 "agents_count":  len(self.agents),
                 # Mercado Pago: vacío = todas las cajas habilitadas
@@ -523,14 +642,96 @@ class APIServer:
 
         @app.route("/panel/log")
         def panel_log():
-            """Devuelve las últimas 100 líneas del log como texto plano."""
-            from core.logging_config import LOG_FILE
+            """
+            Devuelve las últimas 100 líneas del log de HOY, como texto plano.
+            ?tipo=general (default, técnico) | getnet | transbank | mercadopago (narrados por venta).
+            Cada uno vive en un archivo por día (<tipo>-YYYY-MM-DD.log); los días
+            anteriores quedan en el disco con su propio archivo, no se muestran acá.
+            """
+            from core.logging_config import daily_log_path, LOG_BASENAME
+
+            tipo = request.args.get("tipo", "general")
+            if tipo == "general":
+                log_path = str(daily_log_path(LOG_BASENAME))
+            elif tipo in ("getnet", "transbank", "mercadopago"):
+                log_path = str(daily_log_path(tipo))
+            else:
+                return "tipo inválido", 400
+
             try:
-                with open(LOG_FILE, encoding="utf-8") as f:
+                with open(log_path, encoding="utf-8") as f:
                     lines = f.readlines()[-100:]
-                return "".join(lines), 200, {"Content-Type": "text/plain; charset=utf-8"}
+                return "".join(lines) or "(sin entradas todavía)", 200, {"Content-Type": "text/plain; charset=utf-8"}
+            except FileNotFoundError:
+                return "(sin entradas todavía)", 200, {"Content-Type": "text/plain; charset=utf-8"}
             except Exception as e:
                 return f"Error leyendo log: {e}", 500
+
+        @app.route("/panel/pendientes", methods=["GET"])
+        def panel_pendientes():
+            """Transacciones que quedaron sin confirmar y requieren reconciliación."""
+            try:
+                pendientes = tx_store.listar_no_resueltas()
+                return jsonify({"ok": True, "pendientes": pendientes})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e), "pendientes": []}), 500
+
+        @app.route("/panel/pendientes/<tx_id>/reconciliar", methods=["POST"])
+        def panel_pendientes_reconciliar(tx_id):
+            """Reconsulta al POS (Command 101) por el ticket de esta transacción."""
+            tx = tx_store.obtener(tx_id)
+            if not tx:
+                return jsonify({"ok": False, "error": "Transacción no encontrada"}), 404
+            if tx.get("tipo") != "getnet" or not self.getnet:
+                return jsonify({"ok": False, "error": "Reconciliación automática solo disponible para Getnet"}), 400
+
+            getnet_log.info(f"👤 Un operador pidió desde el panel reconsultar el ticket {tx.get('ticket')} (tx {tx_id}).")
+            recon = self.getnet.reconciliar_ticket(tx.get("ticket"), timeout=15)
+            estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
+            nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
+            tx_store.actualizar_estado(
+                tx_id, nuevo_estado, raw_response=recon, nota=recon.get("message"),
+                resuelto_por="sistema (Command 101, gatillado desde panel)" if nuevo_estado != "INDETERMINADA" else None,
+            )
+
+            if nuevo_estado != "INDETERMINADA":
+                with self.busy_lock:
+                    self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+
+            logger.info("Reconciliación manual (panel) tx=%s -> %s", tx_id, nuevo_estado)
+            return jsonify({"ok": True, "estado": nuevo_estado, "detalle": recon})
+
+        @app.route("/panel/pendientes/<tx_id>/resolver", methods=["POST"])
+        def panel_pendientes_resolver(tx_id):
+            """Resolución manual: el operador confirma el resultado mirando el comprobante impreso en el POS."""
+            body = request.get_json(silent=True) or {}
+            ok, err, code = self.resolver_transaccion(
+                tx_id, body.get("estado"), resuelto_por="panel", nota=body.get("nota")
+            )
+            if not ok:
+                return jsonify({"ok": False, "error": err}), code
+            return jsonify({"ok": True, "estado": body.get("estado")})
+
+        @app.route('/pago/resolver/<tx_id>', methods=['POST'])
+        @require_basic_auth
+        def pago_resolver(tx_id):
+            """
+            Resolución manual autenticada de una transacción PENDIENTE/INDETERMINADA
+            (ej. el cajero confirma en tu sistema web mirando el comprobante del POS).
+            Body: {"estado": "APROBADO"|"RECHAZADO", "resuelto_por": "<nombre/id del cajero>", "nota": "..."}
+            """
+            body = request.get_json(silent=True) or {}
+            estado = body.get("estado")
+            resuelto_por = body.get("resuelto_por") or "api"
+            ok, err, code = self.resolver_transaccion(tx_id, estado, resuelto_por=resuelto_por, nota=body.get("nota"))
+            if not ok:
+                return jsonify({"status": "error", "message": err}), code
+            return jsonify({
+                "status": "ok",
+                "transaction_id": tx_id,
+                "estado": estado,
+                "resuelto_por": resuelto_por,
+            }), 200
 
         @app.route("/panel/com_ports", methods=["GET"])
         def panel_com_ports():
@@ -804,6 +1005,7 @@ class APIServer:
             return jsonify({"status": "ok"})
         
         @app.route('/pago/refund', methods=['POST'])
+        @require_basic_auth
         def refund():
             try:
                 data = request.get_json()
@@ -845,29 +1047,43 @@ class APIServer:
                 }), 500
             
         @app.route('/pago/detalle', methods=['POST', 'GET'])
+        @require_basic_auth
         def detalle():
             try:
-                # Obtener parámetro print_on_pos del body o query string
-                print_on_pos = False
-                
+                # Obtener parámetro print_on_pos / type del body o query string
                 if request.method == 'POST':
                     data = request.get_json(silent=True) or {}
                     print_on_pos = data.get('print_on_pos', False)
+                    tipo = data.get('type', 'transbank')
                 else:  # GET
                     print_on_pos = request.args.get('print_on_pos', 'false').lower() == 'true'
-                
-                logger.info(f"Solicitud de detalle recibida: print_on_pos={print_on_pos}")
-                
-                # Ejecutar consulta de detalle con timeout
+                    tipo = request.args.get('type', 'transbank')
+
+                logger.info(f"Solicitud de detalle recibida: type={tipo} print_on_pos={print_on_pos}")
+
+                if tipo == 'getnet':
+                    if not self.getnet:
+                        return jsonify({"status": "error", "message": "POS Getnet no habilitado en esta máquina"}), 503
+
+                    # Command 101 (Último Comprobante): consulta directa a la máquina.
+                    result = self.getnet.get_last_receipt(timeout=15)
+                    if result["status"] == "found":
+                        return jsonify(result), 200
+                    elif result["status"] == "not_found":
+                        return jsonify(result), 404
+                    else:
+                        return jsonify(result), 500
+
+                # Transbank (comportamiento original)
                 result = self.pos.do_details_with_timeout(print_on_pos)
-                
+
                 if result["status"] == "success":
                     return jsonify(result), 200
                 elif result["status"] == "failed":
                     return jsonify(result), 400
                 else:
                     return jsonify(result), 500
-                    
+
             except Exception as e:
                 logger.exception("Error en endpoint /pago/detalle")
                 return jsonify({
@@ -948,15 +1164,55 @@ class APIServer:
 
                 runner_id_sucursal = str(ID_SUCURSAL)
                 runner_nombre_caja = str(NOMBRE_CAJA)
+
+                # Si una venta anterior en esta caja quedó sin confirmar (PENDIENTE o
+                # INDETERMINADA), no se permite intentar una nueva hasta resolverla:
+                # el cliente pudo haber pagado ya en el POS y no queremos cobrarle
+                # dos veces. Esta verificación es persistente (sobrevive un reinicio
+                # del servicio), a diferencia de busy_boxes que es solo en memoria.
+                pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, runner_nombre_caja)
+                if pendiente:
+                    logger.warning("Venta Getnet bloqueada: transacción previa sin resolver tx=%s", pendiente)
+                    getnet_log.info(
+                        f"🔒 Venta rechazada por el sistema: la caja {runner_nombre_caja} tiene una transacción "
+                        f"anterior ({pendiente}) sin confirmar. No se le pidió nada al POS. "
+                        "Debe resolverse desde el panel antes de poder vender de nuevo."
+                    )
+                    return jsonify({
+                        "status": "unresolved_previous_transaction",
+                        "message": "Hay una venta Getnet previa en esta caja sin confirmar. "
+                                    "Debe resolverse desde el panel antes de intentar una nueva venta.",
+                        "pending_transaction_id": pendiente,
+                    }), 409
+
                 key = (runner_id_sucursal, runner_nombre_caja)
                 with self.busy_lock:
                     if key in self.busy_boxes:
                         logger.warning("Caja ocupada (runner): %s/%s", runner_id_sucursal, runner_nombre_caja)
+                        getnet_log.info(
+                            f"🔁 Venta rechazada: la caja {runner_nombre_caja} ya tiene otra venta Getnet en curso "
+                            f"(monto {fmt_monto(amount)} intentado)."
+                        )
                         return jsonify({"status": "busy", "message": "Caja ocupada"}), 429
                     self.busy_boxes.add(key)
-                
+
                 tx_id = str(uuid.uuid4())
-                
+                # Ticket correlacionable con tx_id (máx 24 chars, límite del protocolo Getnet),
+                # usado para reconciliar vía Command 101 si la confirmación no llega.
+                ticket = (tx_id.replace("-", "")[:18] + time.strftime("%H%M%S"))[:24]
+
+                tx_store.registrar_intento(
+                    tx_id=tx_id,
+                    tipo="getnet",
+                    ticket=ticket,
+                    terminal_id=terminal_id,
+                    id_sucursal=runner_id_sucursal,
+                    nombre_caja=runner_nombre_caja,
+                    monto=amount,
+                    client_id_sucursal=id_sucursal,
+                    client_nombre_caja=nombre_caja,
+                )
+
                 with self.tasks_lock:
                     event = threading.Event()
                     self.tasks[tx_id] = {
@@ -970,7 +1226,7 @@ class APIServer:
                         "timestamp": time.time(),
                         "timeout": timeout
                     }
-                
+
                 task_payload = {
                     "tx_id": tx_id,
                     "id_sucursal": runner_id_sucursal,
@@ -980,46 +1236,54 @@ class APIServer:
                     "type": "getnet",
                     "terminal_id": terminal_id,
                     "amount": amount,
-                    "timeout": timeout
+                    "timeout": timeout,
+                    "ticket": ticket,
                 }
-                
+
                 q = self.ensure_queue(runner_id_sucursal, runner_nombre_caja)
                 q.put(task_payload)
                 logger.info(
-                    "Tarea Getnet encolada: tx=%s client=%s/%s runner=%s/%s",
+                    "Tarea Getnet encolada: tx=%s ticket=%s client=%s/%s runner=%s/%s",
                     tx_id,
+                    ticket,
                     id_sucursal,
                     nombre_caja,
                     runner_id_sucursal,
                     runner_nombre_caja,
                 )
-                
+
                 start_wait = time.time()
                 finished = event.wait(timeout=timeout)
                 wait_time = time.time() - start_wait
-                
+
                 if not finished:
-                    with self.tasks_lock:
-                        self.tasks.pop(tx_id, None)
-                    self.internal_free_box(runner_id_sucursal, runner_nombre_caja, "timeout")
-                    logger.error("TIMEOUT Getnet tx=%s después de %.2fs", tx_id, wait_time)
+                    # OJO: a propósito NO se borra la tarea de self.tasks ni se libera
+                    # la caja acá. El worker sigue procesándola en background (el POS
+                    # puede responder tarde, o el módulo Getnet puede quedar intentando
+                    # reconciliar) y su resultado real no debe perderse. Use
+                    # /pago/estado/<tx_id> para conocer el resultado final.
+                    #
+                    # 409 (no 504): no es "reintenta más tarde", es "no sabemos qué pasó,
+                    # no reintentes a ciegas" — el cliente puede haber pagado ya en el POS.
+                    logger.error("DESCONOCIDO Getnet tx=%s después de %.2fs (sigue en proceso)", tx_id, wait_time)
                     return jsonify({
-                        "status": "timeout",
+                        "status": "desconocido",
                         "transaction_id": tx_id,
-                        "message": f"Timeout {timeout}s excedido"
-                    }), 504
-                
+                        "message": "Estado desconocido: verificar comprobante en la máquina antes de reintentar. "
+                                    f"Consulte /pago/estado/{tx_id} para conocer el resultado final una vez disponible.",
+                    }), 409
+
                 with self.tasks_lock:
                     entry = self.tasks.pop(tx_id, {})
                     res = entry.get("result")
                     final_estado = entry.get("estado", "DESCONOCIDO")
-                
+
                 with self.busy_lock:
                     self.busy_boxes.discard(key)
-                
-                logger.info("Respuesta Getnet: tx=%s, estado=%s, tiempo=%.2fs", 
+
+                logger.info("Respuesta Getnet: tx=%s, estado=%s, tiempo=%.2fs",
                             tx_id, final_estado, wait_time)
-                
+
                 return jsonify({
                     "transaction_id": tx_id,
                     "result": res,
@@ -1389,6 +1653,17 @@ class APIServer:
             with self.tasks_lock:
                 task = self.tasks.get(tx_id)
                 if not task:
+                    # La tarea en memoria pudo haberse limpiado (más de 10 min sin
+                    # resolverse) sin que la transacción esté realmente cerrada.
+                    # La base persistente sigue teniendo el estado real.
+                    tx = tx_store.obtener(tx_id)
+                    if tx:
+                        return jsonify({
+                            "transaction_id": tx_id,
+                            "estado": tx.get("estado"),
+                            "result": json.loads(tx["raw_response"]) if tx.get("raw_response") else None,
+                            "fuente": "transaction_store",
+                        }), 200
                     return jsonify({"error": "Transacción no encontrada", "transaction_id": tx_id}), 404
 
                 if task.get("estado") == "PENDIENTE" and task["result"] is None:
@@ -1401,9 +1676,19 @@ class APIServer:
                 result = task.get("result")
                 estado = "DESCONOCIDO"
                 if result:
-                    estado = "APROBADO" if result.get("status") in ("success", "approved") else "RECHAZADO"
-                    if result.get("status") == "error":
+                    status = result.get("status")
+                    if status in ("success", "approved"):
+                        estado = "APROBADO"
+                    elif status == "error":
                         estado = "ERROR"
+                    elif status == "indeterminada":
+                        # No confundir con RECHAZADO: el cliente pudo haber pagado
+                        # igual en el POS y sigue pendiente de reconciliación.
+                        estado = "INDETERMINADA"
+                    elif status == "timeout":
+                        estado = "TIMEOUT"
+                    else:
+                        estado = "RECHAZADO"
                 task["estado"] = estado
 
                 return jsonify({
@@ -1452,6 +1737,39 @@ class APIServer:
             if key in self.busy_boxes:
                 self.busy_boxes.discard(key)
                 logger.info("Caja %s/%s liberada (%s)", id_sucursal, nombre_caja, reason)
+
+    def resolver_transaccion(self, tx_id, estado, resuelto_por, nota=None):
+        """
+        Resuelve (manual o automáticamente) una transacción PENDIENTE/INDETERMINADA:
+        actualiza el registro persistente con quién y cuándo, y recién ahí libera la
+        caja. Usado tanto por el panel (humano mirando el comprobante del POS) como
+        por /pago/resolver/<tx_id> (API autenticada) y el monitor de reconciliación.
+
+        Returns: (ok: bool, error_message: str|None, http_code: int)
+        """
+        tx = tx_store.obtener(tx_id)
+        if not tx:
+            return False, "Transacción no encontrada", 404
+        if estado not in ("APROBADO", "RECHAZADO"):
+            return False, "estado debe ser APROBADO o RECHAZADO", 400
+
+        nota_final = nota or f"Resuelto manualmente por {resuelto_por or 'operador desconocido'}"
+        tx_store.actualizar_estado(
+            tx_id, estado,
+            raw_response={"manual": True, "nota": nota_final, "resuelto_por": resuelto_por},
+            nota=nota_final,
+            resuelto_por=resuelto_por,
+        )
+        with self.busy_lock:
+            self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+
+        logger.info("Resolución tx=%s -> %s por %s", tx_id, estado, resuelto_por)
+        if tx.get("tipo") == "getnet":
+            getnet_log.info(
+                f"👤 {resuelto_por or 'Un operador'} resolvió MANUALMENTE (mirando el comprobante del POS) el "
+                f"ticket {tx.get('ticket')} (tx {tx_id}) como {estado}. Nota: {nota_final}"
+            )
+        return True, None, 200
 
     def run(self):
         logger.info("Servidor Flask arrancando en puerto %s", HTTP_PORT)

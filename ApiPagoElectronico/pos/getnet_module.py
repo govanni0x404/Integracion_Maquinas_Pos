@@ -9,8 +9,10 @@ import hashlib
 import time
 import re
 import logging
+import threading
 from datetime import datetime
 from config.settings import APP_NAME
+from core.business_logging import getnet_log, fmt_monto
 
 logger = logging.getLogger(APP_NAME)
 
@@ -19,13 +21,18 @@ class GetnetModule:
     """
     Módulo para manejar POS Getnet con detección automática de puerto
     """
-    
+
     def __init__(self):
         self.port = None
         self.baudrate = 115200
         self.serial_connection = None
         self.last_error = None
         self._port_cache = None
+        # Todo acceso al puerto serie (venta, consulta de último comprobante) pasa
+        # por acá. Antes solo lo tocaba el worker local, uno a la vez; ahora también
+        # lo puede tocar el monitor de reconciliación automática en background, así
+        # que sin este lock dos operaciones podrían pisarse en el mismo puerto.
+        self._serial_lock = threading.Lock()
     
     def _find_getnet_port(self):
         """Detectar automáticamente el puerto del POS Getnet"""
@@ -73,11 +80,13 @@ class GetnetModule:
             
             if self._test_port_connection(port_name):
                 logger.info(f"[GETNET] ✓ Puerto encontrado: {port_name}")
+                getnet_log.info(f"🔌 POS Getnet conectado — puerto {port_name}")
                 self._port_cache = port_name
                 self.port = port_name
                 return port_name
-        
+
         logger.warning("[GETNET] No se encontró puerto Getnet funcional")
+        getnet_log.info("🔌 No se detectó ningún POS Getnet conectado en los puertos disponibles.")
         return None
     
     def _test_port_connection(self, port_name):
@@ -180,8 +189,14 @@ class GetnetModule:
         except Exception as e:
             self.last_error = str(e)
             logger.error(f"[GETNET] Error: {e}")
+            # El puerto que teníamos cacheado ya no sirve (ej. el dispositivo USB
+            # desapareció): lo soltamos para que la próxima llamada a connect()/
+            # is_online() vuelva a probar puertos en vez de repetir para siempre
+            # el mismo puerto muerto.
+            self.port = None
+            self._port_cache = None
             return False
-    
+
     def disconnect(self):
         """Desconectar"""
         if self.serial_connection and self.serial_connection.is_open:
@@ -285,24 +300,39 @@ class GetnetModule:
         
         return None
     
-    def do_sale_with_timeout(self, amount, timeout=120):
+    def do_sale_with_timeout(self, amount, timeout=120, ticket=None):
         """
         Realizar venta con timeout (compatible con arquitectura existente)
-        
+
+        El ticket se genera fuera de este método (a partir del tx_id de la
+        transacción) cuando es posible, para poder correlacionarlo después
+        con `reconciliar_ticket` si la confirmación no llega. El ticket
+        siempre se devuelve en la respuesta, incluso en error/indeterminada.
+
         Returns:
-            dict: {"status": "success|failed|error", "response": {...}}
+            dict: {"status": "success|failed|error|indeterminada", "response": {...}, "ticket": str}
         """
+        with self._serial_lock:
+            return self._do_sale_with_timeout_locked(amount, timeout=timeout, ticket=ticket)
+
+    def _do_sale_with_timeout_locked(self, amount, timeout=120, ticket=None):
         logger.info(f"[GETNET] Iniciando venta: ${amount}")
-        
+
+        ticket = ticket or time.strftime("%H%M%S")
+        getnet_log.info(f"🟢 Venta iniciada — monto {fmt_monto(amount)} — ticket {ticket}")
+
         if not self.connect():
+            getnet_log.info(
+                f"❌ No se pudo conectar con el POS Getnet (ticket {ticket}): "
+                f"{self.last_error or 'puerto no detectado'}. No se llegó a enviar nada, es seguro reintentar."
+            )
             return {
                 "status": "error",
-                "message": self.last_error or "No se pudo conectar al POS"
+                "message": self.last_error or "No se pudo conectar al POS",
+                "ticket": ticket,
             }
-        
+
         try:
-            ticket = time.strftime("%H%M%S")
-            
             command = {
                 "Command": 100,
                 "Amount": int(amount),
@@ -313,40 +343,189 @@ class GetnetModule:
                 "EmployeeId": 1,
                 "DateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            
+
             if not self._send_command(command):
-                return {"status": "error", "message": "Error enviando comando"}
-            
+                # El comando NO llegó a salir por el puerto serie: es seguro
+                # asumir que el POS nunca lo recibió.
+                getnet_log.info(
+                    f"❌ No se pudo enviar la venta al POS (ticket {ticket}): falla al escribir en el puerto serie. "
+                    "El POS nunca recibió el pedido, es seguro reintentar."
+                )
+                return {"status": "error", "message": "Error enviando comando", "ticket": ticket}
+
             logger.info("[GETNET] Esperando usuario en POS...")
+            getnet_log.info(f"⏳ Venta enviada al POS (ticket {ticket}), esperando que el cliente pague...")
             response = self._read_response(timeout=timeout)
-            
+
             if not response:
-                return {"status": "error", "message": "Sin respuesta del POS"}
-            
+                # El comando SÍ se envió al POS, pero nunca llegó la
+                # confirmación de vuelta (ej. corte de cable). El cliente
+                # puede haber pagado igual: no es seguro tratar esto como un
+                # simple error ni permitir un reintento automático.
+                logger.error(
+                    "[GETNET] Sin respuesta tras enviar venta (ticket=%s, monto=%s) -> "
+                    "queda INDETERMINADA, requiere reconciliación", ticket, amount
+                )
+                getnet_log.info(
+                    f"⚠️ SIN CONFIRMACIÓN — ticket {ticket}, monto {fmt_monto(amount)}. "
+                    "Se le mandó la venta al POS pero nunca llegó la respuesta de vuelta (posible corte de cable). "
+                    "El cliente PUDO HABER PAGADO en la máquina sin que quedara registrado acá. "
+                    "Esta caja queda bloqueada para nuevas ventas hasta confirmar qué pasó (ver panel)."
+                )
+                return {
+                    "status": "indeterminada",
+                    "message": "Se envió la venta al POS pero no se recibió confirmación. "
+                                "La venta pudo haberse realizado en el POS.",
+                    "ticket": ticket,
+                }
+
             response_code = response.get('ResponseCode')
-            
+
             # Aprobada
             if response_code == 0:
                 logger.info(f"[GETNET] ✓ APROBADA - Auth: {response.get('AuthorizationCode')}")
-                return {"status": "success", "response": response}
-            
+                getnet_log.info(
+                    f"✅ Venta APROBADA — ticket {ticket} — monto {fmt_monto(amount)} — "
+                    f"autorización {response.get('AuthorizationCode')} — tarjeta terminada en {response.get('Last4Digits')}"
+                )
+                return {"status": "success", "response": response, "ticket": ticket}
+
             # Cancelada
             elif response_code == 1006:
                 logger.warning("[GETNET] Venta CANCELADA por usuario")
-                return {"status": "failed", "response": response}
-            
+                getnet_log.info(f"🚫 Venta CANCELADA por el cliente en el POS — ticket {ticket} — monto {fmt_monto(amount)}")
+                return {"status": "failed", "response": response, "ticket": ticket}
+
             # Rechazada
             else:
                 logger.warning(f"[GETNET] RECHAZADA - Código: {response_code}")
-                return {"status": "failed", "response": response}
-        
+                getnet_log.info(
+                    f"⛔ Venta RECHAZADA — ticket {ticket} — monto {fmt_monto(amount)} — "
+                    f"motivo: {response.get('ResponseMessage')} (código {response_code})"
+                )
+                return {"status": "failed", "response": response, "ticket": ticket}
+
         except Exception as e:
             logger.error(f"[GETNET] Error en venta: {e}")
-            return {"status": "error", "message": str(e)}
-        
+            getnet_log.info(f"❌ Error inesperado durante la venta (ticket {ticket}): {e}")
+            return {"status": "error", "message": str(e), "ticket": ticket}
+
         finally:
             self.disconnect()
-    
+
+    def get_last_receipt(self, timeout=15):
+        """
+        Comando 101 (Último Comprobante): pregunta al POS por el resultado
+        de la última transacción que ejecutó (venta, anulación o devolución).
+        No recibe ningún identificador — siempre devuelve la última, por eso
+        hay que comparar su "Ticket" contra el que nos interesa reconciliar.
+
+        Returns:
+            dict: {"status": "found|not_found|error", "response": {...}|None, "message": str}
+        """
+        with self._serial_lock:
+            return self._get_last_receipt_locked(timeout=timeout)
+
+    def _get_last_receipt_locked(self, timeout=15):
+        if not self.connect():
+            return {"status": "error", "message": self.last_error or "No se pudo conectar al POS"}
+
+        try:
+            command = {
+                "Command": 101,
+                "PrintOnPos": False,
+                "DateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+            if not self._send_command(command):
+                return {"status": "error", "message": "Error enviando comando de último comprobante"}
+
+            response = self._read_response(timeout=timeout)
+            if not response:
+                return {"status": "error", "message": "Sin respuesta del POS al consultar último comprobante"}
+
+            # 21 = "Transacción no encontrada": el POS no tiene ningún
+            # comprobante que reportar (ej. recién inicializado).
+            if response.get("ResponseCode") == 21:
+                return {"status": "not_found", "response": response}
+
+            return {"status": "found", "response": response}
+
+        except Exception as e:
+            logger.error(f"[GETNET] Error consultando último comprobante: {e}")
+            return {"status": "error", "message": str(e)}
+
+        finally:
+            self.disconnect()
+
+    def reconciliar_ticket(self, ticket, timeout=15):
+        """
+        Intenta resolver una venta que quedó INDETERMINADA consultando al
+        POS por su último comprobante (Command 101) y comparando el Ticket
+        recibido contra el que buscamos. Debe llamarse una vez que el POS
+        vuelve a estar accesible (cable reconectado).
+
+        Returns:
+            dict: {"status": "aprobado|rechazado|no_resuelto", "response": {...}|None, "message": str}
+        """
+        getnet_log.info(f"🔍 Reconciliando ticket {ticket}: consultando al POS su último comprobante (Command 101)...")
+        last = self.get_last_receipt(timeout=timeout)
+
+        if last["status"] == "error":
+            getnet_log.info(f"↪️ No se pudo reconciliar el ticket {ticket}: {last.get('message')}. Sigue INDETERMINADA.")
+            return {"status": "no_resuelto", "message": last.get("message")}
+
+        if last["status"] == "not_found":
+            # El POS no tiene ningún comprobante registrado: nuestra venta
+            # nunca llegó a ejecutarse (el corte pasó antes de que el POS
+            # alcanzara a procesarla).
+            getnet_log.info(
+                f"↪️ Reconciliación del ticket {ticket}: el POS no tiene ningún comprobante registrado — "
+                "la venta nunca llegó a ejecutarse. Queda descartada, es seguro reintentar."
+            )
+            return {
+                "status": "rechazado",
+                "message": "El POS no registra ninguna transacción; la venta nunca se ejecutó.",
+            }
+
+        response = last["response"]
+        pos_ticket = str(response.get("Ticket", "")).strip()
+
+        if pos_ticket != str(ticket).strip():
+            # El último comprobante del POS pertenece a OTRA transacción
+            # (más reciente que la nuestra) -> no podemos confirmar por esta
+            # vía qué pasó con la nuestra.
+            getnet_log.info(
+                f"↪️ Reconciliación del ticket {ticket}: el último comprobante del POS es de OTRA venta "
+                f"(ticket {pos_ticket}). No se puede confirmar automáticamente — requiere revisión manual desde el panel."
+            )
+            return {
+                "status": "no_resuelto",
+                "response": response,
+                "message": f"El último comprobante del POS (ticket={pos_ticket}) "
+                            f"no coincide con el ticket buscado ({ticket}).",
+            }
+
+        function_code = response.get("FunctionCode")
+        response_code = response.get("ResponseCode")
+
+        if function_code == 100 and response_code == 0:
+            getnet_log.info(
+                f"✅ Reconciliación exitosa: el POS confirma que el ticket {ticket} fue APROBADO "
+                f"(autorización {response.get('AuthorizationCode')})."
+            )
+            return {"status": "aprobado", "response": response, "message": "Venta confirmada como APROBADA en el POS."}
+
+        getnet_log.info(
+            f"↪️ Reconciliación exitosa: el POS confirma que el ticket {ticket} fue RECHAZADO/ANULADO "
+            f"(código {response_code}). No se cobró — es seguro descartarla."
+        )
+        return {
+            "status": "rechazado",
+            "response": response,
+            "message": f"Venta confirmada como RECHAZADA/ANULADA en el POS (código {response_code}).",
+        }
+
     def get_current_port(self):
         """Obtener puerto actual"""
         return self.port

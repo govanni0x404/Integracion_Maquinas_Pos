@@ -360,9 +360,26 @@ PANEL_HTML = """<!DOCTYPE html>
 </div>
 {% endif %}
 
+<!-- Transacciones sin confirmar -->
+<div class="card" id="pendientesCard" style="margin-bottom:20px; display:none;">
+  <div class="section-title">⚠️ Transacciones sin confirmar</div>
+  <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">
+    Se enviaron al POS pero no llegó (o no se pudo confirmar) el resultado final.
+    El cliente puede haber pagado igual: revise el comprobante impreso en el POS antes de resolver.
+    Mientras queden aquí, la caja correspondiente queda bloqueada para nuevas ventas Getnet.
+  </div>
+  <div id="pendientesBox"></div>
+</div>
+
 <!-- Log preview -->
 <div class="card">
   <div class="section-title">📋 Log reciente</div>
+  <div class="actions" style="margin-top:0; margin-bottom:12px;">
+    <button class="btn btn-secondary" id="tabLog-general" onclick="setLogTab('general')">🛠️ Técnico</button>
+    <button class="btn btn-secondary" id="tabLog-getnet" onclick="setLogTab('getnet')">💳 Getnet</button>
+    <button class="btn btn-secondary" id="tabLog-transbank" onclick="setLogTab('transbank')">💳 Transbank</button>
+    <button class="btn btn-secondary" id="tabLog-mercadopago" onclick="setLogTab('mercadopago')">💳 Mercado Pago</button>
+  </div>
   <div class="log-box" id="logBox">Cargando...</div>
   <div class="actions">
     <button class="btn btn-secondary" onclick="loadLog()">🔄 Actualizar log</button>
@@ -370,7 +387,7 @@ PANEL_HTML = """<!DOCTYPE html>
 </div>
 
 <footer>
-  {{ app_name }} · http://localhost:{{ http_port }} · Log: {{ env_path | replace('.env','pos_gateway.log') }}
+  {{ app_name }} · http://localhost:{{ http_port }} · Log de hoy: {{ log_path }}
 </footer>
 
 <div id="toast"></div>
@@ -450,10 +467,103 @@ document.getElementById('configForm').addEventListener('submit', async e => {
   }
 });
 
+// ── Transacciones sin confirmar ──
+function fmtFecha(ts) {
+  if (!ts) return '-';
+  return new Date(ts * 1000).toLocaleString('es-CL');
+}
+
+async function loadPendientes() {
+  try {
+    const r = await fetch('/panel/pendientes', { cache: 'no-store' });
+    const j = await r.json();
+    const card = document.getElementById('pendientesCard');
+    const box = document.getElementById('pendientesBox');
+    const items = (j.pendientes || []);
+
+    if (!items.length) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = 'block';
+
+    box.innerHTML = items.map(tx => `
+      <div class="param-row" style="flex-direction:column; align-items:stretch; gap:8px; padding:12px; border:1px solid var(--border, #333); border-radius:8px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+          <strong>${tx.tipo} · $${tx.monto ?? '-'}</strong>
+          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : ''}">${tx.estado}</span>
+        </div>
+        <div style="font-size:11px; color:var(--muted);">
+          tx: ${tx.tx_id}<br>
+          ticket: ${tx.ticket ?? '-'} · caja: ${tx.id_sucursal}/${tx.nombre_caja}<br>
+          creada: ${fmtFecha(tx.created_at)}
+          ${tx.nota ? `<br>nota: ${tx.nota}` : ''}
+        </div>
+        <div class="actions" style="margin-top:0;">
+          <button class="btn btn-secondary" onclick="reconciliarTx('${tx.tx_id}')">🔄 Reconsultar POS</button>
+          <button class="btn btn-secondary" onclick="resolverTx('${tx.tx_id}', 'APROBADO')">✅ Marcar aprobada</button>
+          <button class="btn btn-secondary" onclick="resolverTx('${tx.tx_id}', 'RECHAZADO')">❌ Marcar rechazada</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    // silencioso: no interrumpir el resto del panel por esto
+  }
+}
+loadPendientes();
+setInterval(loadPendientes, 8000);
+
+async function reconciliarTx(txId) {
+  try {
+    const r = await fetch(`/panel/pendientes/${txId}/reconciliar`, { method: 'POST' });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast(j.error || 'No se pudo reconciliar', false);
+      return;
+    }
+    showToast(`Resultado: ${j.estado}`, j.estado !== 'INDETERMINADA');
+    loadPendientes();
+  } catch (e) {
+    showToast('Error reconciliando', false);
+  }
+}
+
+async function resolverTx(txId, estado) {
+  const nota = prompt(`Confirmá mirando el comprobante del POS. ¿Marcar esta transacción como ${estado}?\\nNota (opcional):`, '');
+  if (nota === null) return;
+  try {
+    const r = await fetch(`/panel/pendientes/${txId}/resolver`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ estado, nota })
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast(j.error || 'No se pudo resolver', false);
+      return;
+    }
+    showToast(`Marcada como ${estado}`, true);
+    loadPendientes();
+  } catch (e) {
+    showToast('Error resolviendo', false);
+  }
+}
+
 // ── Log ──
+let currentLogTab = 'general';
+
+function setLogTab(tipo) {
+  currentLogTab = tipo;
+  for (const t of ['general', 'getnet', 'transbank', 'mercadopago']) {
+    const btn = document.getElementById('tabLog-' + t);
+    if (btn) btn.classList.toggle('btn-primary', t === tipo);
+  }
+  loadLog();
+}
+
 async function loadLog() {
   try {
-    const r = await fetch('/panel/log');
+    const r = await fetch('/panel/log?tipo=' + encodeURIComponent(currentLogTab));
     const txt = await r.text();
     const box = document.getElementById('logBox');
     box.textContent = txt || '(sin entradas)';
@@ -462,7 +572,7 @@ async function loadLog() {
     document.getElementById('logBox').textContent = 'No se pudo cargar el log.';
   }
 }
-loadLog();
+setLogTab('general');
 setInterval(loadLog, 5000);
 
 async function refreshAutostart() {

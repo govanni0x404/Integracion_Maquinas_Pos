@@ -130,6 +130,7 @@ def main():
         try:
             server.stop_local_worker()
             server.stop_cleanup_task()
+            server.stop_getnet_reconciliation_monitor()
         except Exception:
             pass
         pos_module.stop_monitor()
