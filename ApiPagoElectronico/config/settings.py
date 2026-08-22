@@ -205,6 +205,11 @@ ALLOWED_ORIGINS = [x.strip() for x in _allowed_origins_raw.split(",") if x.strip
 # GETNET POS
 # ¿Esta máquina tiene POS Getnet conectado?
 USAR_GETNET = os.environ.get("USAR_GETNET", "false").lower() == "true"
+# Puerto COM fijo para el POS Getnet (ej. "COM3"). Si se deja vacío, se
+# detecta automáticamente probando todos los puertos disponibles. Útil para
+# diagnosticar cuando el dispositivo expone varios puertos COM (USB
+# compuesto) y hay que confirmar cuál es el que realmente procesa las ventas.
+GETNET_PORT = os.environ.get("GETNET_PORT", "").strip() or None
 
 # Feature detection helpers (runtime)
 def is_flask_available() -> bool:

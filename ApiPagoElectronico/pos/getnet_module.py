@@ -11,10 +11,28 @@ import re
 import logging
 import threading
 from datetime import datetime
-from config.settings import APP_NAME
+from config.settings import APP_NAME, GETNET_PORT
 from core.business_logging import getnet_log, fmt_monto
 
 logger = logging.getLogger(APP_NAME)
+
+
+def _rget(response, key, default=None):
+    """Lee un campo de la respuesta del POS sin importar mayúsculas/minúsculas.
+
+    El manual de Getnet documenta los campos en PascalCase (ResponseCode,
+    FunctionCode, ResponseMessage...), pero en pruebas con hardware real el
+    POS respondió en camelCase (responseCode, functionCode...). Sin esto,
+    response.get('ResponseCode') daba siempre None y toda venta se
+    clasificaba como RECHAZADA sin importar lo que dijera realmente el POS.
+    """
+    if key in response:
+        return response[key]
+    key_lower = key.lower()
+    for k, v in response.items():
+        if k.lower() == key_lower:
+            return v
+    return default
 
 
 class GetnetModule:
@@ -23,11 +41,17 @@ class GetnetModule:
     """
 
     def __init__(self):
-        self.port = None
+        # Si GETNET_PORT está seteado (.env), se usa ese puerto fijo y se
+        # salta la detección automática por completo — útil para descartar
+        # que la autodetección esté enganchando el puerto equivocado cuando
+        # el dispositivo expone varios puertos COM (USB compuesto).
+        self.port = GETNET_PORT
+        if self.port:
+            logger.info(f"[GETNET] Puerto fijado por configuración (GETNET_PORT): {self.port}")
         self.baudrate = 115200
         self.serial_connection = None
         self.last_error = None
-        self._port_cache = None
+        self._port_cache = GETNET_PORT
         # Todo acceso al puerto serie (venta, consulta de último comprobante) pasa
         # por acá. Antes solo lo tocaba el worker local, uno a la vez; ahora también
         # lo puede tocar el monitor de reconciliación automática en background, así
@@ -135,8 +159,17 @@ class GetnetModule:
                 if test_connection.in_waiting:
                     data = test_connection.read(test_connection.in_waiting).decode('utf-8', errors='ignore')
                     buffer += data
-                    
-                    if any(k in buffer for k in ['JsonSerialized', 'FunctionCode', 'ResponseCode']):
+
+                    # OJO: 'JsonSerialized' NO sirve como marcador acá — es
+                    # una palabra que nosotros mismos escribimos en el
+                    # comando de prueba, así que un puerto que simplemente
+                    # hace eco de lo que se le envía (común en puertos COM
+                    # de diagnóstico/AT que aparecen junto al puerto real en
+                    # dispositivos USB compuestos) pasaría el test igual sin
+                    # ser el POS. 'FunctionCode'/'ResponseCode' sí son
+                    # exclusivos de una respuesta real, porque no aparecen
+                    # en nada de lo que nosotros enviamos.
+                    if any(k in buffer for k in ['FunctionCode', 'ResponseCode']):
                         return True
                 
                 time.sleep(0.05)
@@ -182,7 +215,16 @@ class GetnetModule:
             
             time.sleep(1)
             self.serial_connection.reset_output_buffer()
-            
+            # NOTA: en algún momento se agregó acá un reset_input_buffer()
+            # para descartar basura vieja del buffer de entrada, pero en
+            # pruebas con hardware real eso hacía que el POS dejara de
+            # responder por completo al comando de Venta (probablemente
+            # interrumpe algún handshake inicial que el POS espera al abrir
+            # la sesión). Se sacó a propósito — el caso que intentaba cubrir
+            # (una respuesta vieja tomada como si fuera la actual) ya queda
+            # cubierto por la validación de FunctionCode en _read_response,
+            # sin tocar el buffer físico del puerto.
+
             logger.info(f"[GETNET] ✓ Conectado a {self.port}")
             return True
             
@@ -270,34 +312,61 @@ class GetnetModule:
             logger.error(f"[GETNET] Error enviando: {e}")
             return False
     
-    def _read_response(self, timeout=60):
-        """Leer respuesta del POS"""
+    def _read_response(self, timeout=60, expected_function_code=None):
+        """Leer respuesta del POS.
+
+        Si `expected_function_code` viene informado, se ignora cualquier
+        respuesta cuyo FunctionCode no coincida (ej. una respuesta vieja que
+        haya quedado pendiente en el buffer de otra operación) y se sigue
+        esperando hasta encontrar la respuesta real o agotar el timeout. En
+        pruebas con hardware real esto era necesario: apenas se abría el
+        puerto llegaba una respuesta con FunctionCode 0 que no correspondía
+        en absoluto al comando enviado, y sin este chequeo se tomaba como si
+        fuera el resultado real de la venta.
+        """
         if not self.serial_connection or not self.serial_connection.is_open:
             return None
-        
+
         start = time.time()
         buffer = ""
-        
+
         while time.time() - start < timeout:
             try:
                 if self.serial_connection.in_waiting:
                     data = self.serial_connection.read(self.serial_connection.in_waiting).decode('utf-8', errors='ignore')
                     buffer += data
-                    
+
+                # Sigue extrayendo mensajes del buffer ya recibido (sin
+                # esperar bytes nuevos) hasta encontrar uno que nos sirva o
+                # quedarnos sin mensajes completos que parsear.
+                while buffer:
                     response = self._extract_json_response(buffer)
-                    if response:
-                        return response
-                
+                    if not response:
+                        break
+
+                    match = re.search(r'\{"JsonSerialized":".+?","Sign":".+?"\}', buffer)
+                    buffer = buffer[match.end():] if match else ""
+
+                    response_function_code = _rget(response, "FunctionCode")
+                    if expected_function_code is not None and response_function_code != expected_function_code:
+                        logger.warning(
+                            f"[GETNET] Respuesta con FunctionCode inesperado ({response_function_code}, "
+                            f"se esperaba {expected_function_code}) — se descarta y se sigue esperando: {response}"
+                        )
+                        continue
+
+                    return response
+
                 if buffer.strip() in ('D', 'DD'):
                     time.sleep(0.2)
                     continue
-                
+
                 time.sleep(0.1)
-                
+
             except Exception as e:
                 logger.error(f"[GETNET] Error leyendo: {e}")
                 break
-        
+
         return None
     
     def do_sale_with_timeout(self, amount, timeout=120, ticket=None):
@@ -355,7 +424,7 @@ class GetnetModule:
 
             logger.info("[GETNET] Esperando usuario en POS...")
             getnet_log.info(f"⏳ Venta enviada al POS (ticket {ticket}), esperando que el cliente pague...")
-            response = self._read_response(timeout=timeout)
+            response = self._read_response(timeout=timeout, expected_function_code=100)
 
             if not response:
                 # El comando SÍ se envió al POS, pero nunca llegó la
@@ -379,14 +448,14 @@ class GetnetModule:
                     "ticket": ticket,
                 }
 
-            response_code = response.get('ResponseCode')
+            response_code = _rget(response, 'ResponseCode')
 
             # Aprobada
             if response_code == 0:
-                logger.info(f"[GETNET] ✓ APROBADA - Auth: {response.get('AuthorizationCode')}")
+                logger.info(f"[GETNET] ✓ APROBADA - Auth: {_rget(response, 'AuthorizationCode')}")
                 getnet_log.info(
                     f"✅ Venta APROBADA — ticket {ticket} — monto {fmt_monto(amount)} — "
-                    f"autorización {response.get('AuthorizationCode')} — tarjeta terminada en {response.get('Last4Digits')}"
+                    f"autorización {_rget(response, 'AuthorizationCode')} — tarjeta terminada en {_rget(response, 'Last4Digits')}"
                 )
                 return {"status": "success", "response": response, "ticket": ticket}
 
@@ -401,7 +470,7 @@ class GetnetModule:
                 logger.warning(f"[GETNET] RECHAZADA - Código: {response_code}")
                 getnet_log.info(
                     f"⛔ Venta RECHAZADA — ticket {ticket} — monto {fmt_monto(amount)} — "
-                    f"motivo: {response.get('ResponseMessage')} (código {response_code})"
+                    f"motivo: {_rget(response, 'ResponseMessage')} (código {response_code})"
                 )
                 return {"status": "failed", "response": response, "ticket": ticket}
 
@@ -444,9 +513,10 @@ class GetnetModule:
             if not response:
                 return {"status": "error", "message": "Sin respuesta del POS al consultar último comprobante"}
 
-            # 21 = "Transacción no encontrada": el POS no tiene ningún
-            # comprobante que reportar (ej. recién inicializado).
-            if response.get("ResponseCode") == 21:
+            # 21 = "Transacción no encontrada" (según el manual). En hardware real
+            # observamos 99 = "No hay transacciones" para el mismo caso — el manual
+            # no lo documenta, pero el mensaje es inequívoco. Se aceptan ambos.
+            if _rget(response, "ResponseCode") in (21, 99):
                 return {"status": "not_found", "response": response}
 
             return {"status": "found", "response": response}
@@ -489,7 +559,7 @@ class GetnetModule:
             }
 
         response = last["response"]
-        pos_ticket = str(response.get("Ticket", "")).strip()
+        pos_ticket = str(_rget(response, "Ticket", "")).strip()
 
         if pos_ticket != str(ticket).strip():
             # El último comprobante del POS pertenece a OTRA transacción
@@ -506,13 +576,13 @@ class GetnetModule:
                             f"no coincide con el ticket buscado ({ticket}).",
             }
 
-        function_code = response.get("FunctionCode")
-        response_code = response.get("ResponseCode")
+        function_code = _rget(response, "FunctionCode")
+        response_code = _rget(response, "ResponseCode")
 
         if function_code == 100 and response_code == 0:
             getnet_log.info(
                 f"✅ Reconciliación exitosa: el POS confirma que el ticket {ticket} fue APROBADO "
-                f"(autorización {response.get('AuthorizationCode')})."
+                f"(autorización {_rget(response, 'AuthorizationCode')})."
             )
             return {"status": "aprobado", "response": response, "message": "Venta confirmada como APROBADA en el POS."}
 

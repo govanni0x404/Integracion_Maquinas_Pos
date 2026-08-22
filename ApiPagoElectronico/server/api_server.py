@@ -1197,9 +1197,14 @@ class APIServer:
                     self.busy_boxes.add(key)
 
                 tx_id = str(uuid.uuid4())
-                # Ticket correlacionable con tx_id (máx 24 chars, límite del protocolo Getnet),
-                # usado para reconciliar vía Command 101 si la confirmación no llega.
-                ticket = (tx_id.replace("-", "")[:18] + time.strftime("%H%M%S"))[:24]
+                # TicketNumber ("Número de Boleta") del protocolo Getnet: tiene que ser
+                # puramente numérico. En pruebas con hardware real, tickets de 22 y 13
+                # dígitos (milisegundos desde epoch) se ignoraban en silencio, mientras que
+                # uno de 10 dígitos (segundos desde epoch) sí funcionó — el firmware del
+                # POS parece guardar este campo como entero de 32 bits internamente (máx.
+                # 2.147.483.647) aunque el protocolo lo declare como string: milisegundos
+                # desde epoch desborda ese rango, segundos desde epoch no. Se usa segundos.
+                ticket = str(int(time.time()))
 
                 tx_store.registrar_intento(
                     tx_id=tx_id,
