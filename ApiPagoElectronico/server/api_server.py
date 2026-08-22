@@ -744,6 +744,22 @@ class APIServer:
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e), "ports": [], "csv": ""}), 500
 
+        @app.route("/panel/getnet_port", methods=["GET"])
+        def panel_getnet_port():
+            """A diferencia de /panel/com_ports (que solo lista puertos del sistema),
+            esto prueba cada uno con el protocolo real de Getnet (POLL) y devuelve
+            el que efectivamente respondió como POS Getnet."""
+            if not self.getnet:
+                return jsonify({"ok": False, "error": "Getnet no habilitado en esta máquina", "port": None}), 503
+            try:
+                with self.getnet._serial_lock:
+                    port = self.getnet._find_getnet_port()
+                if port:
+                    return jsonify({"ok": True, "port": port})
+                return jsonify({"ok": False, "error": "No se detectó ningún POS Getnet conectado", "port": None}), 404
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e), "port": None}), 500
+
         @app.route("/panel/autostart", methods=["GET", "POST"])
         def panel_autostart():
             import platform

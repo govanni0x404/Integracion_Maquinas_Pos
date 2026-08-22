@@ -240,59 +240,139 @@ PANEL_HTML = """<!DOCTYPE html>
     📄 {{ env_path }}
   </div>
 
-  <form id="configForm">
+  <form id="configForm" autocomplete="off">
+
+    {% set hints = {
+      'HTTP_PORT': 'Puerto donde corre esta API. Se define en el .env, no se puede cambiar desde acá.',
+      'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
+      'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
+      'TERMINAL_ID': 'ID del terminal que se reporta a Transbank/Getnet. Si se deja vacío, se arma automático a partir de NOMBRE_CAJA.',
+      'USAR_POS_FISICO': '⚠️ Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
+      'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
+      'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
+      'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
+      'MAX_TRANSACTION_TIME': 'Segundos máximos que Transbank espera una respuesta antes de darla por vencida.',
+      'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP para operaciones de POS.',
+    } %}
+
+    {% set hints = {
+      'HTTP_PORT': 'Puerto donde corre esta API. Se define en el .env, no se puede cambiar desde acá.',
+      'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
+      'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
+      'TERMINAL_ID': 'ID del terminal que se reporta a Transbank/Getnet. Si se deja vacío, se arma automático a partir de NOMBRE_CAJA.',
+      'USAR_POS_FISICO': 'Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
+      'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
+      'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
+      'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
+      'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
+      'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
+      'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"). Ej: https://mitienda.cl,https://otra.cl',
+      'MP_TERMINAL_ID': 'Terminal ID específico para Mercado Pago. Si se deja vacío, se usa el TERMINAL_ID general de arriba. Tiene prioridad sobre él solo para transacciones de Mercado Pago.',
+      'ALLOW_MP_TOKEN_IN_REQUEST': '⚠️ Si está en true, cualquiera que llame a /pago puede mandar su propio access_token de Mercado Pago en el request, en vez de usar el MP_ACCESS_TOKEN configurado acá. Útil solo si varias cajas/clientes usan cuentas de MP distintas. Dejar en false si no lo necesitás.',
+    } %}
+
+    {% macro terminal_id_field(placeholder='') %}
+    {% if 'TERMINAL_ID' in env_vars %}
+    <div class="param-row">
+      <span class="param-key">TERMINAL_ID</span>
+      <input class="param-val sync-field" data-sync="TERMINAL_ID" name="TERMINAL_ID" value="{{ env_vars['TERMINAL_ID'] }}" title="{{ hints['TERMINAL_ID'] }}" autocomplete="off"
+             {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}>
+    </div>
+    {% endif %}
+    {% endmacro %}
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:4px;">
       Identificación de esta caja
     </div>
 
-    {% for key in ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID'] %}
+    {% for key in ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA'] %}
     {% if key in env_vars %}
     <div class="param-row">
       <span class="param-key">{{ key }}</span>
       {% if key == 'HTTP_PORT' %}
         <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" readonly title="El puerto se define en el .env y no se puede editar desde el panel">
       {% else %}
-        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}">
+        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
       {% endif %}
     </div>
     {% endif %}
     {% endfor %}
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      Hardware POS
+      ⏱️ General
     </div>
 
-    {% for key in ['USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','MAX_TRANSACTION_TIME','TIMEOUT_SERVER'] %}
+    {% for key in ['MAX_TRANSACTION_TIME','TIMEOUT_SERVER'] %}
+    {% if key in env_vars %}
+    <div class="param-row">
+      <span class="param-key">{{ key }}</span>
+      <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <div class="param-row">
+      <span class="param-key">ALLOWED_ORIGINS</span>
+      <input class="param-val" name="ALLOWED_ORIGINS" value="{{ env_vars.get('ALLOWED_ORIGINS', '') }}" title="{{ hints['ALLOWED_ORIGINS'] }}" autocomplete="off"
+             placeholder="vacío = se permite cualquier origen (*)">
+    </div>
+
+    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
+      💳 Transbank
+    </div>
+
+    {% for key in ['USAR_POS_FISICO','PUERTOS_COM'] %}
     {% if key in env_vars %}
     <div class="param-row">
       <span class="param-key">{{ key }}</span>
       {% if key == 'PUERTOS_COM' %}
         <div style="display:flex; gap:10px; flex:1; min-width:0;">
-          <input class="param-val" id="puertosComInput" name="{{ key }}" value="{{ env_vars[key] }}" style="flex:1; min-width:0;">
+          <input class="param-val" id="puertosComInput" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints[key] }}" autocomplete="off" style="flex:1; min-width:0;">
           <button type="button" class="btn btn-secondary" onclick="detectComPorts()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
         </div>
       {% else %}
-        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}">
+        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
       {% endif %}
     </div>
     {% endif %}
     {% endfor %}
+    {{ terminal_id_field() }}
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      Mercado Pago
+      💳 Getnet
+    </div>
+
+    {% if 'USAR_GETNET' in env_vars %}
+    <div class="param-row">
+      <span class="param-key">USAR_GETNET</span>
+      <input class="param-val" name="USAR_GETNET" value="{{ env_vars['USAR_GETNET'] }}" title="{{ hints['USAR_GETNET'] }}" autocomplete="off">
+    </div>
+    {% endif %}
+
+    <div class="param-row">
+      <span class="param-key">GETNET_PORT</span>
+      <div style="display:flex; gap:10px; flex:1; min-width:0;">
+        <input class="param-val" id="getnetPortInput" name="GETNET_PORT" value="{{ env_vars.get('GETNET_PORT', '') }}" title="{{ hints['GETNET_PORT'] }}" autocomplete="off"
+               placeholder="vacío = detección automática" style="flex:1; min-width:0;">
+        <button type="button" class="btn btn-secondary" onclick="detectGetnetPort()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
+      </div>
+    </div>
+    {{ terminal_id_field() }}
+
+    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
+      💳 Mercado Pago
     </div>
 
     {% if 'ALLOWED_MP' in env_vars %}
     <div class="param-row">
       <span class="param-key">ALLOWED_MP</span>
-      <input class="param-val" name="ALLOWED_MP" value="{{ env_vars['ALLOWED_MP'] }}"
+      <input class="param-val" name="ALLOWED_MP" value="{{ env_vars['ALLOWED_MP'] }}" autocomplete="off"
              placeholder="vacío = todas las cajas; ej: 70:caja_10,70:caja_11">
     </div>
     {% else %}
     <div class="param-row">
       <span class="param-key">ALLOWED_MP</span>
-      <input class="param-val" name="ALLOWED_MP" value=""
+      <input class="param-val" name="ALLOWED_MP" value="" autocomplete="off"
              placeholder="vacío = TODAS las cajas habilitadas para MP">
     </div>
     {% endif %}
@@ -300,7 +380,7 @@ PANEL_HTML = """<!DOCTYPE html>
     {% if 'MP_API_URL' in env_vars %}
     <div class="param-row">
       <span class="param-key">MP_API_URL</span>
-      <input class="param-val" name="MP_API_URL" value="{{ env_vars['MP_API_URL'] }}">
+      <input class="param-val" name="MP_API_URL" value="{{ env_vars['MP_API_URL'] }}" autocomplete="off">
     </div>
     {% endif %}
 
@@ -311,16 +391,22 @@ PANEL_HTML = """<!DOCTYPE html>
              placeholder="{% if mp_token_configured %}configurado (dejar vacío para mantener){% else %}pegar APP_USR-...{% endif %}">
     </div>
 
+    <div class="param-row">
+      <span class="param-key">ALLOW_MP_TOKEN_IN_REQUEST</span>
+      <input class="param-val" name="ALLOW_MP_TOKEN_IN_REQUEST" value="{{ env_vars.get('ALLOW_MP_TOKEN_IN_REQUEST', 'false') }}" title="{{ hints['ALLOW_MP_TOKEN_IN_REQUEST'] }}" autocomplete="off">
+    </div>
+    {{ terminal_id_field(placeholder='ej: NEWLAND_N950') }}
+
     {% if env_vars %}
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
       Otros parámetros
     </div>
-    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN'] %}
+    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST'] %}
     {% for key, val in env_vars.items() %}
     {% if key not in known %}
     <div class="param-row">
       <span class="param-key">{{ key }}</span>
-      <input class="param-val" name="{{ key }}" value="{{ val }}">
+      <input class="param-val" name="{{ key }}" value="{{ val }}" autocomplete="off">
     </div>
     {% endif %}
     {% endfor %}
@@ -408,6 +494,15 @@ function showToast(msg, ok) {
   t.className = 'show ' + (ok ? 'ok' : 'err');
   setTimeout(() => t.className = '', 3500);
 }
+
+// ── Sincronizar campos duplicados (ej. TERMINAL_ID aparece en varias
+//    secciones, pero es el mismo valor — editar cualquiera actualiza todos) ──
+document.querySelectorAll('#configForm .sync-field').forEach(inp => {
+  inp.addEventListener('input', () => {
+    document.querySelectorAll(`#configForm .sync-field[data-sync="${inp.dataset.sync}"]`)
+      .forEach(other => { if (other !== inp) other.value = inp.value; });
+  });
+});
 
 // ── Guardar config + reiniciar ──
 document.getElementById('configForm').addEventListener('submit', async e => {
@@ -630,6 +725,30 @@ async function detectComPorts() {
     showToast(`Puertos detectados: ${ports.join(', ')}`, true);
   } catch (e) {
     showToast('Error detectando puertos', false);
+  } finally {
+    for (const b of btns) b.disabled = false;
+  }
+}
+
+async function detectGetnetPort() {
+  const btns = Array.from(document.querySelectorAll('button')).filter(b => (b.textContent || '').trim() === 'Detectar');
+  for (const b of btns) b.disabled = true;
+  try {
+    // A diferencia de /panel/com_ports (que solo lista puertos del sistema),
+    // esto prueba cada puerto con el protocolo real de Getnet y devuelve el
+    // que efectivamente respondió como POS Getnet.
+    const r = await fetch('/panel/getnet_port', { cache: 'no-store' });
+    const j = await r.json();
+    const input = document.getElementById('getnetPortInput');
+    if (!j.ok || !j.port) {
+      showToast(j.error || 'No se detectó ningún POS Getnet conectado', false);
+      return;
+    }
+    if (!input) return;
+    input.value = j.port;
+    showToast(`Puerto Getnet detectado: ${j.port}`, true);
+  } catch (e) {
+    showToast('Error detectando puerto Getnet', false);
   } finally {
     for (const b of btns) b.disabled = false;
   }
