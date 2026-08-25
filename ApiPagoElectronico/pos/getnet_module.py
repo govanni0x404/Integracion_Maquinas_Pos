@@ -528,12 +528,28 @@ class GetnetModule:
         finally:
             self.disconnect()
 
-    def reconciliar_ticket(self, ticket, timeout=15):
+    def reconciliar_ticket(self, ticket, amount=None, timeout=15):
         """
         Intenta resolver una venta que quedó INDETERMINADA consultando al
         POS por su último comprobante (Command 101) y comparando el Ticket
         recibido contra el que buscamos. Debe llamarse una vez que el POS
         vuelve a estar accesible (cable reconectado).
+
+        En pruebas con hardware real, el POS A920 Pro NO devuelve el campo
+        "Ticket" en la respuesta del Command 101 (el manual lo marca como
+        "campo opcional" y en la práctica nunca llega) — así que no se puede
+        confiar en él para correlacionar. Si `amount` viene informado y el
+        POS no devolvió Ticket, se usa el monto como respaldo: como la caja
+        queda bloqueada para nuevas ventas mientras haya una transacción
+        indeterminada (ver `hay_pendiente_sin_resolver`), el último
+        comprobante del POS en ese estado sólo puede pertenecer a la venta
+        que estamos reconciliando.
+
+        Tampoco se puede confiar en que el FunctionCode de la respuesta sea
+        el del comando original (100 = Venta), como asume el manual: en
+        hardware real el POS devuelve el FunctionCode del propio comando
+        consultado (101), sin importar si el último comprobante es de una
+        Venta, Anulación o Devolución.
 
         Returns:
             dict: {"status": "aprobado|rechazado|no_resuelto", "response": {...}|None, "message": str}
@@ -560,35 +576,51 @@ class GetnetModule:
 
         response = last["response"]
         pos_ticket = str(_rget(response, "Ticket", "")).strip()
+        pos_amount = _rget(response, "Amount")
 
-        if pos_ticket != str(ticket).strip():
+        if pos_ticket:
+            match = pos_ticket == str(ticket).strip()
+            match_reason = f"ticket {pos_ticket}"
+        elif amount is not None and pos_amount == amount:
+            # El POS no devolvió Ticket (comportamiento normal en este
+            # hardware) -> correlacionamos por monto, respaldados por el
+            # bloqueo de caja que garantiza que no hay otra venta en curso.
+            match = True
+            match_reason = f"monto ${pos_amount} (el POS no devolvió Ticket)"
+        else:
+            match = False
+            match_reason = f"ticket vacío, monto ${pos_amount}"
+
+        response_json = json.dumps(response, ensure_ascii=False, default=str)
+
+        if not match:
             # El último comprobante del POS pertenece a OTRA transacción
             # (más reciente que la nuestra) -> no podemos confirmar por esta
             # vía qué pasó con la nuestra.
             getnet_log.info(
                 f"↪️ Reconciliación del ticket {ticket}: el último comprobante del POS es de OTRA venta "
-                f"(ticket {pos_ticket}). No se puede confirmar automáticamente — requiere revisión manual desde el panel."
+                f"({match_reason}). No se puede confirmar automáticamente — requiere revisión manual desde el panel. "
+                f"JSON: {response_json}"
             )
             return {
                 "status": "no_resuelto",
                 "response": response,
-                "message": f"El último comprobante del POS (ticket={pos_ticket}) "
+                "message": f"El último comprobante del POS ({match_reason}) "
                             f"no coincide con el ticket buscado ({ticket}).",
             }
 
-        function_code = _rget(response, "FunctionCode")
         response_code = _rget(response, "ResponseCode")
 
-        if function_code == 100 and response_code == 0:
+        if response_code == 0:
             getnet_log.info(
-                f"✅ Reconciliación exitosa: el POS confirma que el ticket {ticket} fue APROBADO "
-                f"(autorización {_rget(response, 'AuthorizationCode')})."
+                f"✅ Reconciliación exitosa (por {match_reason}): el POS confirma que el ticket {ticket} fue APROBADO "
+                f"(autorización {_rget(response, 'AuthorizationCode')}). JSON: {response_json}"
             )
             return {"status": "aprobado", "response": response, "message": "Venta confirmada como APROBADA en el POS."}
 
         getnet_log.info(
-            f"↪️ Reconciliación exitosa: el POS confirma que el ticket {ticket} fue RECHAZADO/ANULADO "
-            f"(código {response_code}). No se cobró — es seguro descartarla."
+            f"↪️ Reconciliación exitosa (por {match_reason}): el POS confirma que el ticket {ticket} fue RECHAZADO/ANULADO "
+            f"(código {response_code}). No se cobró — es seguro descartarla. JSON: {response_json}"
         )
         return {
             "status": "rechazado",

@@ -273,7 +273,7 @@ class APIServer:
                             if result.get("status") == "indeterminada":
                                 # Puede que el cable ya se haya reconectado: intentamos
                                 # resolverlo de inmediato antes de dejarlo pendiente.
-                                recon = self.getnet.reconciliar_ticket(ticket, timeout=15)
+                                recon = self.getnet.reconciliar_ticket(ticket, amount=amount, timeout=15)
                                 logger.info("Reconciliación Getnet tx=%s ticket=%s -> %s", tx_id, ticket, recon.get("status"))
                                 if recon.get("status") == "aprobado":
                                     result = {"status": "success", "response": recon.get("response"), "ticket": ticket, "reconciliado": True}
@@ -422,7 +422,7 @@ class APIServer:
                         getnet_log.info(
                             f"🔁 Monitor automático: reintentando reconciliar el ticket {ticket} (tx {tx_id})..."
                         )
-                        recon = self.getnet.reconciliar_ticket(ticket, timeout=15)
+                        recon = self.getnet.reconciliar_ticket(ticket, amount=tx.get("monto"), timeout=15)
                         estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
                         nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
 
@@ -686,7 +686,7 @@ class APIServer:
                 return jsonify({"ok": False, "error": "Reconciliación automática solo disponible para Getnet"}), 400
 
             getnet_log.info(f"👤 Un operador pidió desde el panel reconsultar el ticket {tx.get('ticket')} (tx {tx_id}).")
-            recon = self.getnet.reconciliar_ticket(tx.get("ticket"), timeout=15)
+            recon = self.getnet.reconciliar_ticket(tx.get("ticket"), amount=tx.get("monto"), timeout=15)
             estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
             nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
             tx_store.actualizar_estado(
@@ -1305,12 +1305,20 @@ class APIServer:
                 logger.info("Respuesta Getnet: tx=%s, estado=%s, tiempo=%.2fs",
                             tx_id, final_estado, wait_time)
 
-                return jsonify({
+                respuesta_pago = {
                     "transaction_id": tx_id,
                     "result": res,
                     "estado": final_estado,
                     "tiempo_total": round(wait_time, 2)
-                })
+                }
+                # Se deja en el log el mismo JSON que recibe el cliente en /pago,
+                # para poder procesarlo directamente desde el log sin depender
+                # de que el cliente haya guardado la respuesta HTTP original.
+                getnet_log.info(
+                    f"📄 Respuesta /pago tx={tx_id} (estado={final_estado}): "
+                    f"{json.dumps(respuesta_pago, ensure_ascii=False, default=str)}"
+                )
+                return jsonify(respuesta_pago)
 
             # TRANSBANK FLOW
             elif pos_type == "transbank":
