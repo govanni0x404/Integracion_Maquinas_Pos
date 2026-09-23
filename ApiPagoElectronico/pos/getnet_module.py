@@ -58,11 +58,15 @@ class GetnetModule:
         # que sin este lock dos operaciones podrían pisarse en el mismo puerto.
         self._serial_lock = threading.Lock()
     
-    def _find_getnet_port(self):
-        """Detectar automáticamente el puerto del POS Getnet"""
+    def _find_getnet_port(self, exclude=None):
+        """Detectar automáticamente el puerto del POS Getnet
+
+        exclude: puertos que no se deben sondear (ej. el que ya usa Transbank).
+        """
+        excluded = {p for p in (exclude or []) if p}
         logger.info("[GETNET] Buscando puerto automáticamente...")
         
-        if self._port_cache:
+        if self._port_cache and self._port_cache not in excluded:
             logger.info(f"[GETNET] Usando puerto cacheado: {self._port_cache}")
             if self._test_port_connection(self._port_cache):
                 self.port = self._port_cache
@@ -86,6 +90,9 @@ class GetnetModule:
         
         for port_info in available_ports:
             port_name = port_info.device
+            if port_name in excluded:
+                logger.info(f"[GETNET] Omitiendo {port_name} (en uso por otra integración)")
+                continue
             description = port_info.description.lower()
             
             if 'getnet' in description:

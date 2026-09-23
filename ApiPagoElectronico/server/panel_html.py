@@ -328,10 +328,10 @@ PANEL_HTML = """<!DOCTYPE html>
       {% if key == 'PUERTOS_COM' %}
         <div style="display:flex; gap:10px; flex:1; min-width:0;">
           <input class="param-val" id="puertosComInput" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints[key] }}" autocomplete="off" style="flex:1; min-width:0;">
-          <button type="button" class="btn btn-secondary" onclick="detectComPorts()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
+          <button type="button" id="btnDetectTransbank" class="btn btn-secondary" onclick="detectComPorts()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
         </div>
       {% else %}
-        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
+        <input class="param-val" {% if key == 'USAR_POS_FISICO' %}id="usarPosInput" oninput="refreshDetectButtons()"{% endif %} name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
       {% endif %}
     </div>
     {% endif %}
@@ -345,7 +345,7 @@ PANEL_HTML = """<!DOCTYPE html>
     {% if 'USAR_GETNET' in env_vars %}
     <div class="param-row">
       <span class="param-key">USAR_GETNET</span>
-      <input class="param-val" name="USAR_GETNET" value="{{ env_vars['USAR_GETNET'] }}" title="{{ hints['USAR_GETNET'] }}" autocomplete="off">
+      <input class="param-val" id="usarGetnetInput" oninput="refreshDetectButtons()" name="USAR_GETNET" value="{{ env_vars['USAR_GETNET'] }}" title="{{ hints['USAR_GETNET'] }}" autocomplete="off">
     </div>
     {% endif %}
 
@@ -354,7 +354,7 @@ PANEL_HTML = """<!DOCTYPE html>
       <div style="display:flex; gap:10px; flex:1; min-width:0;">
         <input class="param-val" id="getnetPortInput" name="GETNET_PORT" value="{{ env_vars.get('GETNET_PORT', '') }}" title="{{ hints['GETNET_PORT'] }}" autocomplete="off"
                placeholder="vacío = detección automática" style="flex:1; min-width:0;">
-        <button type="button" class="btn btn-secondary" onclick="detectGetnetPort()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
+        <button type="button" id="btnDetectGetnet" class="btn btn-secondary" onclick="detectGetnetPort()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
       </div>
     </div>
     {{ terminal_id_field() }}
@@ -704,35 +704,72 @@ async function setAutostart(enabled) {
   }
 }
 
+// Cada botón "Detectar" solo se habilita si su máquina está en true, y la
+// detección prueba el protocolo de esa máquina (no lista todos los puertos).
+const DETECT_BUTTONS = [
+  { btn: 'btnDetectTransbank', flag: 'usarPosInput', serverFlag: {{ usar_pos | tojson }}, name: 'Transbank', key: 'USAR_POS_FISICO' },
+  { btn: 'btnDetectGetnet', flag: 'usarGetnetInput', serverFlag: {{ usar_getnet | tojson }}, name: 'Getnet', key: 'USAR_GETNET' },
+];
+let detecting = false;
+
+function isFlagOn(inputId, serverFlag) {
+  const input = document.getElementById(inputId);
+  const value = input ? input.value : serverFlag;
+  return String(value || '').trim().toLowerCase() === 'true';
+}
+
+function refreshDetectButtons() {
+  for (const d of DETECT_BUTTONS) {
+    const b = document.getElementById(d.btn);
+    if (!b) continue;
+    const on = isFlagOn(d.flag, d.serverFlag);
+    b.disabled = detecting || !on;
+    b.title = on ? `Buscar el puerto del POS ${d.name}` : `${d.key} está en false: no se detectan puertos de ${d.name}`;
+  }
+}
+refreshDetectButtons();
+
+function setDetecting(value) {
+  detecting = value;
+  refreshDetectButtons();
+}
+
 async function detectComPorts() {
-  const btns = Array.from(document.querySelectorAll('button')).filter(b => (b.textContent || '').trim() === 'Detectar');
-  for (const b of btns) b.disabled = true;
+  if (!isFlagOn('usarPosInput', {{ usar_pos | tojson }})) {
+    showToast('USAR_POS_FISICO está en false: no se detectan puertos de Transbank', false);
+    return;
+  }
+  setDetecting(true);
+  showToast('Buscando POS Transbank en los puertos...', true);
   try {
     const r = await fetch('/panel/com_ports', { cache: 'no-store' });
     const j = await r.json();
     if (!j.ok) {
-      showToast(j.error || 'No se pudieron detectar puertos', false);
+      showToast(j.error || 'No se detectó ningún POS Transbank conectado', false);
       return;
     }
     const ports = (j.ports || []).filter(Boolean);
     const input = document.getElementById('puertosComInput');
     if (!input) return;
     if (!ports.length) {
-      showToast('No se detectaron puertos COM', false);
+      showToast('No se detectó ningún POS Transbank conectado', false);
       return;
     }
     input.value = ports.join(',');
-    showToast(`Puertos detectados: ${ports.join(', ')}`, true);
+    showToast(`Puerto Transbank detectado: ${ports.join(', ')}`, true);
   } catch (e) {
-    showToast('Error detectando puertos', false);
+    showToast('Error detectando puerto Transbank', false);
   } finally {
-    for (const b of btns) b.disabled = false;
+    setDetecting(false);
   }
 }
 
 async function detectGetnetPort() {
-  const btns = Array.from(document.querySelectorAll('button')).filter(b => (b.textContent || '').trim() === 'Detectar');
-  for (const b of btns) b.disabled = true;
+  if (!isFlagOn('usarGetnetInput', {{ usar_getnet | tojson }})) {
+    showToast('USAR_GETNET está en false: no se detectan puertos de Getnet', false);
+    return;
+  }
+  setDetecting(true);
   try {
     // A diferencia de /panel/com_ports (que solo lista puertos del sistema),
     // esto prueba cada puerto con el protocolo real de Getnet y devuelve el
@@ -750,7 +787,7 @@ async function detectGetnetPort() {
   } catch (e) {
     showToast('Error detectando puerto Getnet', false);
   } finally {
-    for (const b of btns) b.disabled = false;
+    setDetecting(false);
   }
 }
 </script>

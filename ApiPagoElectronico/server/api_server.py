@@ -24,6 +24,8 @@ from config.settings import (
     TIMEOUT_SERVER,
     MAX_TRANSACTION_TIME,
     HTTP_PORT,
+    USAR_POS_FISICO,
+    USAR_GETNET,
 )
 from server.auth import require_basic_auth
 from server.panel_html import PANEL_HTML
@@ -733,27 +735,48 @@ class APIServer:
                 "resuelto_por": resuelto_por,
             }), 200
 
+        def _venta_en_curso():
+            with self.busy_lock:
+                return bool(self.busy_boxes)
+
         @app.route("/panel/com_ports", methods=["GET"])
         def panel_com_ports():
+            """Detecta el puerto del POS Transbank probando cada puerto con el
+            protocolo de Transbank (POLL). Solo devuelve puertos donde realmente
+            respondió un POS Transbank, y nunca sondea el puerto de Getnet."""
+            if not USAR_POS_FISICO or not self.pos:
+                return jsonify({"ok": False, "ports": [], "csv": "",
+                                "error": "Transbank deshabilitado (USAR_POS_FISICO=false). "
+                                         "Si lo acabás de cambiar, guardá y reiniciá."}), 409
+            if _venta_en_curso():
+                return jsonify({"ok": False, "ports": [], "csv": "",
+                                "error": "Hay una venta en curso, intentá de nuevo cuando termine"}), 409
             try:
-                from serial.tools import list_ports
-                ports = [p.device for p in list_ports.comports()]
-                ports = [p for p in ports if p]
-                ports = sorted(set(ports), key=lambda x: x.lower())
-                return jsonify({"ok": True, "ports": ports, "csv": ",".join(ports)})
+                getnet_port = self.getnet.get_current_port() if self.getnet else None
+                port = self.pos.detect_port(exclude=[getnet_port])
+                if port:
+                    return jsonify({"ok": True, "ports": [port], "csv": port})
+                return jsonify({"ok": False, "ports": [], "csv": "",
+                                "error": "No se detectó ningún POS Transbank conectado"}), 404
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e), "ports": [], "csv": ""}), 500
 
         @app.route("/panel/getnet_port", methods=["GET"])
         def panel_getnet_port():
-            """A diferencia de /panel/com_ports (que solo lista puertos del sistema),
-            esto prueba cada uno con el protocolo real de Getnet (POLL) y devuelve
-            el que efectivamente respondió como POS Getnet."""
-            if not self.getnet:
-                return jsonify({"ok": False, "error": "Getnet no habilitado en esta máquina", "port": None}), 503
+            """Prueba cada puerto con el protocolo real de Getnet (POLL) y devuelve
+            el que efectivamente respondió como POS Getnet. Nunca sondea el puerto
+            de Transbank."""
+            if not USAR_GETNET or not self.getnet:
+                return jsonify({"ok": False, "port": None,
+                                "error": "Getnet deshabilitado (USAR_GETNET=false). "
+                                         "Si lo acabás de cambiar, guardá y reiniciá."}), 409
+            if _venta_en_curso():
+                return jsonify({"ok": False, "port": None,
+                                "error": "Hay una venta en curso, intentá de nuevo cuando termine"}), 409
             try:
+                transbank_port = self.pos.get_current_port() if (USAR_POS_FISICO and self.pos) else None
                 with self.getnet._serial_lock:
-                    port = self.getnet._find_getnet_port()
+                    port = self.getnet._find_getnet_port(exclude=[transbank_port])
                 if port:
                     return jsonify({"ok": True, "port": port})
                 return jsonify({"ok": False, "error": "No se detectó ningún POS Getnet conectado", "port": None}), 404

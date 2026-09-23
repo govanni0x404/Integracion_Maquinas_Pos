@@ -57,8 +57,12 @@ class POSModule:
         except Exception:
             return []
 
-    def detect_port(self):
-        """Detecta en qué puerto COM está conectado el POS."""
+    def detect_port(self, exclude=None):
+        """Detecta en qué puerto COM está conectado el POS.
+
+        exclude: puertos que no se deben sondear (ej. el que ya usa Getnet),
+        para no mandarle tramas de Transbank a otra máquina.
+        """
         if not USAR_POS_FISICO:
             logger.debug("POS físico deshabilitado por configuración")
             return None
@@ -67,6 +71,10 @@ class POSModule:
         logger.info("Puertos detectados: %s | Preferidos: %s", ports, ",".join(self.prefer_ports))
 
         ordered = [p for p in self.prefer_ports if p in ports] + [p for p in ports if p not in self.prefer_ports]
+        excluded = {p for p in (exclude or []) if p}
+        if excluded:
+            ordered = [p for p in ordered if p not in excluded]
+            logger.info("Puertos excluidos de la detección Transbank: %s", ",".join(sorted(excluded)))
 
         for p in ordered:
             pos = None
