@@ -201,7 +201,7 @@ class POSModule:
         with self.lock:
             return self.current_port
 
-    def open_port_and_sale(self, port, amount):
+    def open_port_and_sale(self, port, amount, ticket=None):
         if not TRANSBANK_AVAILABLE:
             transbank_log.info(f"❌ No se pudo vender: el SDK de Transbank no está disponible en esta instalación.")
             return {"status": "error", "message": "Transbank SDK no disponible"}
@@ -214,7 +214,7 @@ class POSModule:
                 transbank_log.info(f"❌ No se pudo abrir el puerto {port}. No se llegó a enviar nada al POS, es seguro reintentar.")
                 return {"status": "error", "message": f"No se pudo abrir {port}"}
 
-            ticket = time.strftime("%H%M%S")
+            ticket = ticket or time.strftime("%H%M%S")
             logger.info("Venta POS -> puerto=%s monto=%s ticket=%s", port, amount, ticket)
             transbank_log.info(f"⏳ Venta enviada al POS (ticket {ticket}), esperando que el cliente pague...")
 
@@ -247,8 +247,15 @@ class POSModule:
                 pass
             gc.collect()
 
-    def do_sale_with_timeout(self, amount, timeout=MAX_TRANSACTION_TIME):
-        """Ejecuta una venta con timeout para evitar bloqueos infinitos."""
+    def do_sale_with_timeout(self, amount, timeout=MAX_TRANSACTION_TIME, ticket=None, on_late_result=None):
+        """
+        Ejecuta una venta con timeout para evitar bloqueos infinitos.
+
+        Si se agota el timeout devuelve status "indeterminada": la venta ya se
+        envió al POS y el cliente pudo haber pagado. El hilo de la venta no se
+        puede matar, así que si el POS responde después, ese resultado tardío
+        se entrega a on_late_result(res) para reconciliar la transacción.
+        """
         port = self.get_current_port() or self.detect_port()
 
         if not port:
@@ -256,33 +263,52 @@ class POSModule:
             return {"status": "error", "message": "No se detectó POS conectado"}
 
         result_queue = queue.Queue(maxsize=1)
+        state_lock = threading.Lock()
+        state = {"timed_out": False}
 
         def worker():
             try:
-                res = self.open_port_and_sale(port, amount)
-                result_queue.put(res)
+                res = self.open_port_and_sale(port, amount, ticket=ticket)
             except Exception as e:
-                result_queue.put({"status": "error", "message": str(e)})
+                res = {"status": "error", "message": str(e)}
+            with state_lock:
+                late = state["timed_out"]
+                if not late:
+                    result_queue.put(res)
+            if late:
+                logger.info("Resultado tardío Transbank (ticket %s): %s", ticket, res.get("status"))
+                transbank_log.info(
+                    f"📬 El POS respondió DESPUÉS del timeout — ticket {ticket} — monto {fmt_monto(amount)} — "
+                    f"resultado {res.get('status')}"
+                )
+                if on_late_result:
+                    try:
+                        on_late_result(res)
+                    except Exception as e:
+                        logger.error("Error procesando resultado tardío Transbank: %s\n%s", e, traceback.format_exc())
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
         t.join(timeout=timeout)
 
-        if t.is_alive():
-            logger.error("Timeout en venta POS")
-            # NOTA: la venta sigue corriendo en background (el hilo no se puede matar).
-            # Igual que puede pasar con Getnet, el cliente puede haber pagado en el POS
-            # sin que esta respuesta lo refleje — acá no se reconcilia automáticamente.
-            transbank_log.info(
-                f"⚠️ SIN CONFIRMACIÓN (timeout) — monto {fmt_monto(amount)} — puerto {port}. "
-                "La venta puede seguir procesándose en el POS: revisar manualmente si se cobró antes de reintentar."
-            )
-            return {"status": "error", "message": "Timeout en venta POS"}
+        with state_lock:
+            if result_queue.empty():
+                state["timed_out"] = True
 
-        try:
-            return result_queue.get_nowait()
-        except queue.Empty:
-            return {"status": "error", "message": "No se obtuvo respuesta"}
+        if state["timed_out"]:
+            logger.error("Timeout en venta POS (ticket %s)", ticket)
+            transbank_log.info(
+                f"⚠️ SIN CONFIRMACIÓN (timeout) — ticket {ticket} — monto {fmt_monto(amount)} — puerto {port}. "
+                "La venta puede seguir procesándose en el POS: queda INDETERMINADA y la caja bloqueada "
+                "hasta que el POS responda o se resuelva desde el panel."
+            )
+            return {
+                "status": "indeterminada",
+                "ticket": ticket,
+                "message": "Timeout en venta POS: verificar el comprobante en la máquina antes de reintentar",
+            }
+
+        return result_queue.get_nowait()
 
     def start_monitor(self, interval=15):
         """Monitor inteligente: verifica puerto actual, re-detecta solo si se pierde"""

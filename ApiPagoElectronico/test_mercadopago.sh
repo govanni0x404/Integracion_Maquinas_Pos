@@ -35,8 +35,10 @@ fi
 HTTP_PORT="$(grep -E '^HTTP_PORT='    "$ENV_FILE" | cut -d'=' -f2 | tr -d ' \r' || echo '5005')"
 ID_SUCURSAL="$(grep -E '^ID_SUCURSAL=' "$ENV_FILE" | cut -d'=' -f2 | tr -d ' \r' || echo '1')"
 NOMBRE_CAJA="$(grep -E '^NOMBRE_CAJA=' "$ENV_FILE" | cut -d'=' -f2 | tr -d ' \r' || echo 'caja_1')"
-AUTH_USER="$(grep -E '^API_AUTH_USER=' "$ENV_FILE" | cut -d'=' -f2 | tr -d ' \r' || echo '')"
-AUTH_PASS="$(grep -E '^API_AUTH_PASS=' "$ENV_FILE" | cut -d'=' -f2 | tr -d ' \r' || echo '')"
+# Las credenciales Basic Auth no están en el .env (viven en el código del
+# servicio): se toman de POS_API_USER / POS_API_PASS o se piden por consola.
+AUTH_USER="${POS_API_USER:-}"
+AUTH_PASS="${POS_API_PASS:-}"
 TIMEOUT_SERVER="$(grep -E '^TIMEOUT_SERVER=' "$ENV_FILE" | cut -d'=' -f2 | tr -d ' \r' || echo '120')"
 MP_ACCESS_TOKEN_ENV="$(grep -E '^MP_ACCESS_TOKEN=' "$ENV_FILE" | cut -d'=' -f2- | tr -d ' \r' || echo '')"
 
@@ -45,7 +47,6 @@ MP_ACCESS_TOKEN_ENV="$(grep -E '^MP_ACCESS_TOKEN=' "$ENV_FILE" | cut -d'=' -f2- 
 MP_DEVICES=(
     "NEWLAND_N950__N950NCC503616517"
 )
-MP_DEFAULT_TOKEN="APP_USR-264907018128872-092410-b9ce30b26ee7bbc8253c75cc2a806c22-2379339163"
 
 BASE_URL="http://localhost:${HTTP_PORT}"
 
@@ -65,7 +66,7 @@ STATUS_CODE="$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 "${BAS
 
 if [[ "$STATUS_CODE" == "000" ]]; then
     echo -e "${RED}✘ El servicio no responde en ${BASE_URL}${NC}"
-    echo -e "   Inicia el servicio primero con: ${CYAN}./iniciar_servicio.sh${NC}"
+    echo -e "   Inicia el servicio primero (python app.py o ApiPagoElectronico.exe)"
     exit 1
 fi
 echo -e "${GREEN}✔ Servicio activo (HTTP ${STATUS_CODE})${NC}"
@@ -77,6 +78,17 @@ if [[ -z "${MP_ACCESS_TOKEN_ENV}" ]]; then
     echo -e "${RED}✘ Falta MP_ACCESS_TOKEN en .env${NC}"
     echo -e "   Agrega: ${YELLOW}MP_ACCESS_TOKEN=APP_USR-...${NC}"
     exit 1
+fi
+
+# Credenciales Basic Auth del servicio
+if [[ -z "$AUTH_USER" ]]; then
+    echo -n "  Usuario API: "
+    read -r AUTH_USER
+fi
+if [[ -z "$AUTH_PASS" ]]; then
+    echo -n "  Clave API: "
+    read -rs AUTH_PASS
+    echo ""
 fi
 
 # Terminal ID del dispositivo MP Point
@@ -123,7 +135,7 @@ echo -e "  ${BOLD}Resumen de la prueba:${NC}"
 echo -e "  Tipo:       mercadopago"
 echo -e "  Monto:      \$${MONTO}"
 echo -e "  Terminal:   ${MP_TERMINAL_ID}"
-echo -e "  Token:      (desde .env) ${MP_ACCESS_TOKEN_ENV:0:10}..."
+echo -e "  Token:      configurado en .env"
 echo -e "  Timeout:    ${TIMEOUT}s"
 echo -e "${CYAN}─────────────────────────────────────────────${NC}"
 echo ""
@@ -216,7 +228,6 @@ case "$MP_STATUS" in
         echo -e "   → Asegúrate de que el dispositivo ${YELLOW}${MP_TERMINAL_ID}${NC} esté encendido y vinculado" ;;
     error)
         echo -e "${RED}✘ ERROR — Revisa MP_ACCESS_TOKEN y terminal_id${NC}"
-        echo -e "   → token(.env): ${MP_ACCESS_TOKEN_ENV:0:20}..."
         echo -e "   → terminal_id: ${MP_TERMINAL_ID}"
         echo -e "   → Dispositivos válidos: https://www.mercadopago.cl/point/devices" ;;
     failed)

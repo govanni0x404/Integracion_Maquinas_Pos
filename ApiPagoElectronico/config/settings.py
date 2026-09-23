@@ -3,12 +3,16 @@ import sys
 import socket
 from pathlib import Path
 
-# Credenciales API — valores SIEMPRE hardcodeados en el código, nunca del .env
+# Credenciales API — SIEMPRE definidas en el código, nunca del .env.
+# La clave NO se guarda en texto plano: solo su hash PBKDF2-SHA256
+# (formato "pbkdf2_sha256$<iteraciones>$<salt_hex>$<hash_hex>").
+# Para cambiar la clave, generar un hash nuevo con:
+#   python -c "import hashlib,os,getpass; s=os.urandom(16); p=getpass.getpass(); print('pbkdf2_sha256$200000$'+s.hex()+'$'+hashlib.pbkdf2_hmac('sha256',p.encode(),s,200000).hex())"
 API_AUTH_USER = "DATAMAULE"
-API_AUTH_PASS = "TpiyC0iuezhnP2r355OL0X3C8jkVqC"
+API_AUTH_PASS_HASH = "pbkdf2_sha256$200000$b5fada2c559914f4d7b835f3673e6039$fcbff68cb7b00032f9872f0f981ca3d86b05d0785d31fc5d86f358cbee49064e"
 
 # Claves que NUNCA se leen del .env — siempre hardcodeadas en el código
-_ENV_PROTECTED_KEYS = {"API_AUTH_USER", "API_AUTH_PASS"}
+_ENV_PROTECTED_KEYS = {"API_AUTH_USER", "API_AUTH_PASS", "API_AUTH_PASS_HASH"}
 
 def _parse_env_file(path: str) -> dict:
     """Parser minimo de .env — no requiere el modulo dotenv."""
@@ -41,6 +45,11 @@ def _find_and_load_dotenv():
     Usa dotenv si esta disponible, sino un parser propio.
     """
     candidates = []
+
+    # 0. Ruta explícita (tests / diagnóstico): no se busca en ningún otro lado
+    forced = os.environ.get("POS_GATEWAY_ENV_FILE", "").strip()
+    if forced and Path(forced).exists():
+        candidates.append(Path(forced))
 
     # 1. Junto al ejecutable (PyInstaller onefile/onedir)
     try:
@@ -148,7 +157,7 @@ def _log_auth_diagnostics():
         f"[AUTH-DIAG] Método de carga .env: {_dotenv_info.get('loader', 'no se cargó .env')}",
         f"[AUTH-DIAG] Claves en os.environ eliminadas: {_dotenv_info.get('removed_from_env', [])}",
         f"[AUTH-DIAG] API_AUTH_USER final: '{API_AUTH_USER}'",
-        f"[AUTH-DIAG] API_AUTH_PASS final: '{API_AUTH_PASS[:4]}{'*' * (len(API_AUTH_PASS)-4)}'",
+        f"[AUTH-DIAG] API_AUTH_PASS_HASH configurado: {bool(API_AUTH_PASS_HASH)}",
         f"[AUTH-DIAG] API_AUTH_USER en os.environ ahora: '{os.environ.get('API_AUTH_USER', '(vacío=correcto)')}'" ,
         "[AUTH-DIAG] ========================================",
     ]

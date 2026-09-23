@@ -27,7 +27,7 @@ from config.settings import (
     USAR_POS_FISICO,
     USAR_GETNET,
 )
-from server.auth import require_basic_auth
+from server.auth import require_basic_auth, check_basic_auth_header, check_local_panel_request
 from server.panel_html import PANEL_HTML
 from pos.pos_module import POSModule
 from core import transaction_store as tx_store
@@ -60,6 +60,26 @@ def _http_json(method: str, url: str, headers: dict | None = None, payload: dict
     except Exception:
         parsed = {"raw": decoded}
     return status, parsed
+
+def _estado_db(result):
+    """Traduce el status de un resultado de venta al estado persistente de tx_store."""
+    return {
+        "success": "APROBADO", "approved": "APROBADO",
+        "error": "ERROR", "indeterminada": "INDETERMINADA",
+    }.get((result or {}).get("status"), "RECHAZADO")
+
+
+def _mp_aprobado(order_info):
+    """
+    La API de Orders de Mercado Pago informa un cobro exitoso como
+    status="processed" + status_detail="accredited" (visto en producción);
+    "approved"/"success" se aceptan por compatibilidad.
+    """
+    status = (order_info or {}).get("status")
+    if status in ("approved", "success"):
+        return True
+    return status == "processed" and (order_info or {}).get("status_detail") in (None, "accredited")
+
 
 def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVER, idempotency_key=None, external_reference=None):
     """
@@ -125,12 +145,19 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
 
             logger.info("Orden %s finalizada con estado: %s", order_id, status)
             logger.info("Respuesta final MercadoPago: %s", json.dumps(order_info, ensure_ascii=False))
-            aprobado = status in ("approved", "success")
+            aprobado = _mp_aprobado(order_info)
             mercadopago_log.info(
                 f"{'✅' if aprobado else '⛔'} Cobro FINALIZADO — orden {order_id} — terminal {terminal_id} — "
                 f"monto {fmt_monto(amount)} — estado {status}"
             )
-            return {"status": status, "order_id": order_id, "response": order_info}
+            # Se normaliza a "approved" (contrato documentado para el cliente web);
+            # el estado original de MP queda en mp_status y en response.
+            return {
+                "status": "approved" if aprobado else status,
+                "mp_status": status,
+                "order_id": order_id,
+                "response": order_info,
+            }
 
         logger.warning("Timeout esperando respuesta MP orden %s", order_id)
         mercadopago_log.info(
@@ -159,9 +186,10 @@ class APIServer:
         self.getnet = getnet_module
         self.app = Flask(__name__)
         cors_origins = ALLOWED_ORIGINS or "*"
+        # El panel (/panel/*) queda fuera de CORS: solo se usa desde el mismo origen.
         CORS(
             self.app,
-            resources={r"/*": {"origins": cors_origins}},
+            resources={r"^/(?!panel(/|$)).*": {"origins": cors_origins}},
             allow_headers=["Content-Type", "Authorization", "X-Pos-Token"],
             methods=["GET", "POST", "OPTIONS"],
             supports_credentials=False,
@@ -261,7 +289,12 @@ class APIServer:
 
                     if tipo == "transbank":
                         amount = task.get("amount")
-                        result = self.pos.do_sale_with_timeout(amount, timeout=custom_timeout)
+                        result = self.pos.do_sale_with_timeout(
+                            amount,
+                            timeout=custom_timeout,
+                            ticket=task.get("ticket"),
+                            on_late_result=lambda res, tx_id=tx_id: self.aplicar_resultado_tardio(tx_id, res),
+                        )
                         logger.info("Resultado Transbank: %s", result.get("status") if isinstance(result, dict) else result)
                     elif tipo == "getnet":
                         if not self.getnet:
@@ -284,13 +317,6 @@ class APIServer:
                                               "reconciliado": True, "reconcile_message": recon.get("message")}
                                 else:
                                     result["reconcile_message"] = recon.get("message")
-
-                            if tx_store.obtener(tx_id):
-                                estado_db = {
-                                    "success": "APROBADO", "approved": "APROBADO",
-                                    "error": "ERROR", "indeterminada": "INDETERMINADA",
-                                }.get(result.get("status"), "RECHAZADO")
-                                tx_store.actualizar_estado(tx_id, estado_db, raw_response=result)
                     elif tipo == "mercadopago":
                         terminal_id = task.get("terminal_id") or task.get("id_terminal") or MP_TERMINAL_ID or ID_TERMINAL
                         access_token = None
@@ -310,6 +336,15 @@ class APIServer:
                         )
                     else:
                         result = {"status": "error", "message": "Tipo no soportado"}
+
+                    if tipo in ("getnet", "transbank"):
+                        tx = tx_store.obtener(tx_id)
+                        if tx:
+                            estado_db = _estado_db(result)
+                            # Si una respuesta tardía del POS (o un operador) ya resolvió la
+                            # transacción, no se la vuelve a marcar como INDETERMINADA.
+                            if not (estado_db == "INDETERMINADA" and tx.get("estado") != "PENDIENTE"):
+                                tx_store.actualizar_estado(tx_id, estado_db, raw_response=result)
 
                     with self.tasks_lock:
                         entry = self.tasks.get(tx_id)
@@ -464,55 +499,23 @@ class APIServer:
             from flask import redirect
             return redirect("/panel")
 
+        @app.before_request
+        def _proteger_panel():
+            if request.path == "/panel" or request.path.startswith("/panel/"):
+                return check_local_panel_request()
+            return None
+
         @app.route("/auth/test")
         def auth_test():
-            """Endpoint de diagn\u00f3stico: verifica credenciales sin bloquear. Accesible desde cualquier browser."""
-            import base64
-            from config.settings import API_AUTH_USER, API_AUTH_PASS
-
-            # Credenciales configuradas en el servidor
-            server_user = API_AUTH_USER
-            server_pass = API_AUTH_PASS
-
-            # Leer credenciales enviadas (si las hay)
+            """Diagnóstico para clientes: indica si las credenciales enviadas son válidas.
+            No expone nada de las credenciales configuradas en el servidor."""
             auth_header = request.headers.get("Authorization", "")
-            client_user = None
-            client_pass = None
-            decode_error = None
-            match = False
-
-            if auth_header.startswith("Basic "):
-                try:
-                    encoded = auth_header[6:].strip()
-                    decoded = base64.b64decode(encoded).decode("utf-8", errors="replace")
-                    client_user, _, client_pass = decoded.partition(":")
-                except Exception as e:
-                    decode_error = str(e)
-
-            if client_user is not None and client_pass is not None:
-                match = (client_user == server_user and client_pass == server_pass)
-
-            result = {
-                "server": {
-                    "user": server_user,
-                    "user_len": len(server_user),
-                    "pass_len": len(server_pass),
-                    "user_repr": repr(server_user),       # muestra chars invisibles
-                    "pass_sha256_8": __import__("hashlib").sha256(server_pass.encode()).hexdigest()[:8],
-                },
-                "client": {
-                    "header_present": bool(auth_header),
-                    "user": client_user,
-                    "user_len": len(client_user) if client_user else 0,
-                    "pass_len": len(client_pass) if client_pass else 0,
-                    "user_repr": repr(client_user) if client_user else None,
-                    "pass_sha256_8": __import__("hashlib").sha256(client_pass.encode()).hexdigest()[:8] if client_pass else None,
-                    "decode_error": decode_error,
-                },
+            match = check_basic_auth_header(auth_header) if auth_header else False
+            return jsonify({
+                "header_present": bool(auth_header),
                 "match": match,
                 "verdict": "CREDENCIALES CORRECTAS" if match else "CREDENCIALES INCORRECTAS o ausentes",
-            }
-            return jsonify(result)
+            })
 
         @app.route("/panel")
         def panel_ui():
@@ -597,8 +600,22 @@ class APIServer:
             """Guarda cambios al .env desde el panel web."""
             import sys, os
             from pathlib import Path
-            data = request.get_json(force=True, silent=True) or {}
-            data.pop("HTTP_PORT", None)
+            import re
+            from config.settings import _ENV_PROTECTED_KEYS
+            raw = request.get_json(force=True, silent=True)
+            if not isinstance(raw, dict):
+                return jsonify({"ok": False, "error": "Se esperaba un objeto JSON"}), 400
+            data = {}
+            for k, v in raw.items():
+                k = str(k).strip()
+                if k == "HTTP_PORT" or k in _ENV_PROTECTED_KEYS:
+                    continue
+                if not re.fullmatch(r"[A-Z][A-Z0-9_]*", k):
+                    return jsonify({"ok": False, "error": f"Clave inválida: {k!r}"}), 400
+                v = "" if v is None else str(v)
+                if "\n" in v or "\r" in v:
+                    return jsonify({"ok": False, "error": f"El valor de {k} no puede tener saltos de línea"}), 400
+                data[k] = v
 
             env_path = None
             for p in [
@@ -844,143 +861,50 @@ class APIServer:
 
         @app.route("/panel/restart", methods=["POST"])
         def panel_restart():
-            """Reinicia el servicio — multiplataforma (macOS, Linux, Windows)."""
+            """Reinicia el servicio relanzando el propio proceso (.exe compilado o python app.py)."""
             import sys
             import platform
             import subprocess
-            import threading
-            import time
             import os
             import signal
             from pathlib import Path
 
             is_windows = platform.system() == "Windows"
-            is_mac     = platform.system() == "Darwin"
-
-            # Buscar script de reinicio según plataforma
-            bases = [
-                Path(sys.executable).parent.parent.parent,  # dist/ compiled
-                Path(sys.executable).parent,                 # dist/AppName/ (onedir)
-            ]
-            try:
-                argv0 = Path(sys.argv[0]).resolve()
-                if not is_mac or argv0.suffix != ".py":
-                    bases.append(argv0.parent)  # desarrollo (solo si no es mac + .py)
-            except Exception:
-                pass
-
-            script = None
-            for base in bases:
-                if is_windows:
-                    candidates = ["reiniciar_windows.bat", "iniciar_windows.bat"]
-                elif is_mac:
-                    candidates = ["reiniciar_servicio.sh", "iniciar_servicio.sh",
-                                  "reiniciar_mac.sh", "iniciar_mac.sh"]
-                else:  # Linux
-                    candidates = ["reiniciar_linux.sh", "iniciar_linux.sh",
-                                  "reiniciar_servicio.sh"]
-                for name in candidates:
-                    c = base / name
-                    if c.exists():
-                        script = c
-                        break
-                if script:
-                    break
-
-            def _kill_me(delay=2.5):
-                time.sleep(delay)
-                os.kill(os.getpid(), signal.SIGTERM)
-
-            if script:
-                logger.info("Reinicio vía panel: ejecutando %s", script)
-                env = os.environ.copy()
-                env.pop("_MEIPASS2", None)
-                env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-                if is_windows:
-                    no_window_flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                    subprocess.Popen(
-                        ["cmd", "/c", str(script), "--silent"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=env,
-                        creationflags=no_window_flag,
-                    )
-                else:
-                    subprocess.Popen(
-                        ["bash", str(script)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=env,
-                        start_new_session=True,
-                    )
-                threading.Thread(target=_kill_me, args=(2.5,), daemon=True).start()
+            exe = sys.executable
+            if getattr(sys, "frozen", False):
+                # PyInstaller: sys.executable ya es ApiPagoElectronico.exe
+                cmd = [exe] + sys.argv[1:]
             else:
-                # Fallback: relanzar el propio proceso
-                logger.info("Reinicio vía panel: relanzando proceso directamente")
-                exe  = sys.executable
-                argv = sys.argv[:]
+                cmd = [exe, str(Path(sys.argv[0]).resolve())] + sys.argv[1:]
 
-                def _relaunch():
-                    time.sleep(2.0)
-                    try:
-                        env = os.environ.copy()
-                        env.pop("_MEIPASS2", None)
-                        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-                        if is_windows:
-                            no_window_flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                            subprocess.Popen([exe] + argv, creationflags=no_window_flag, env=env)
-                        elif is_mac:
-                            exe_path = Path(exe).resolve()
-                            exe_dir = exe_path.parent
-                            parts = exe_dir.parts
-                            if "Contents" in parts and "MacOS" in parts:
-                                app_bundle = exe_dir.parent.parent
-                                subprocess.Popen(
-                                    ["open", "-n", str(app_bundle)],
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL,
-                                    env=env,
-                                    start_new_session=True,
-                                )
-                            else:
-                                cmd = [exe] + argv
-                                try:
-                                    if argv and str(argv[0]).lower().endswith(".py"):
-                                        cmd = [exe, str(Path(argv[0]).resolve())] + argv[1:]
-                                except Exception:
-                                    pass
-                                subprocess.Popen(
-                                    cmd,
-                                    start_new_session=True,
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL,
-                                    env=env,
-                                )
-                        else:
-                            cmd = [exe] + argv
-                            try:
-                                if argv and str(argv[0]).lower().endswith(".py"):
-                                    cmd = [exe, str(Path(argv[0]).resolve())] + argv[1:]
-                            except Exception:
-                                pass
-                            subprocess.Popen(
-                                cmd,
-                                start_new_session=True,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                env=env,
-                            )
-                    except Exception as e:
-                        logger.error("Error al relanzar: %s", e)
-                    finally:
-                        os.kill(os.getpid(), signal.SIGTERM)
+            def _relaunch():
+                time.sleep(2.0)
+                try:
+                    env = os.environ.copy()
+                    env.pop("_MEIPASS2", None)
+                    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+                    if is_windows:
+                        no_window_flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                        subprocess.Popen(cmd, creationflags=no_window_flag, env=env)
+                    else:
+                        subprocess.Popen(
+                            cmd,
+                            start_new_session=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            env=env,
+                        )
+                except Exception as e:
+                    logger.error("Error al relanzar: %s", e)
+                finally:
+                    os.kill(os.getpid(), signal.SIGTERM)
 
-                threading.Thread(target=_relaunch, daemon=True).start()
-
+            logger.info("Reinicio vía panel: relanzando %s", cmd)
+            threading.Thread(target=_relaunch, daemon=True).start()
             return jsonify({"ok": True, "message": "Reiniciando..."}), 200
 
         @app.route("/register_agent", methods=["POST"])
-
+        @require_basic_auth
         def http_register_agent():
             data = request.get_json(force=True, silent=True) or {}
             id_sucursal = data.get("id_sucursal")
@@ -998,6 +922,7 @@ class APIServer:
             return jsonify({"status": "ok"})
 
         @app.route("/poll", methods=["GET"])
+        @require_basic_auth
         def http_poll():
             id_sucursal = request.args.get("id_sucursal")
             nombre_caja = request.args.get("nombre_caja")
@@ -1014,6 +939,7 @@ class APIServer:
                 return jsonify({"task": None, "heartbeat": True})
 
         @app.route("/result", methods=["POST"])
+        @require_basic_auth
         def http_result():
             data = request.get_json(force=True, silent=True) or {}
             tx_id = data.get("tx_id")
@@ -1376,6 +1302,23 @@ class APIServer:
 
                 runner_id_sucursal = str(ID_SUCURSAL)
                 runner_nombre_caja = str(NOMBRE_CAJA)
+
+                # Igual que Getnet: una venta previa sin confirmar bloquea la caja.
+                pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, runner_nombre_caja)
+                if pendiente:
+                    logger.warning("Venta Transbank bloqueada: transacción previa sin resolver tx=%s", pendiente)
+                    transbank_log.info(
+                        f"🔒 Venta rechazada por el sistema: la caja {runner_nombre_caja} tiene una transacción "
+                        f"anterior ({pendiente}) sin confirmar. No se le pidió nada al POS. "
+                        "Debe resolverse desde el panel antes de poder vender de nuevo."
+                    )
+                    return jsonify({
+                        "status": "unresolved_previous_transaction",
+                        "message": "Hay una venta previa en esta caja sin confirmar. "
+                                   "Debe resolverse desde el panel antes de intentar una nueva venta.",
+                        "pending_transaction_id": pendiente,
+                    }), 409
+
                 key = (runner_id_sucursal, runner_nombre_caja)
                 with self.busy_lock:
                     if key in self.busy_boxes:
@@ -1384,6 +1327,19 @@ class APIServer:
                     self.busy_boxes.add(key)
 
                 tx_id = str(uuid.uuid4())
+                ticket_transbank = time.strftime("%H%M%S")
+
+                tx_store.registrar_intento(
+                    tx_id=tx_id,
+                    tipo="transbank",
+                    ticket=ticket_transbank,
+                    terminal_id=terminal_id_transbank,
+                    id_sucursal=runner_id_sucursal,
+                    nombre_caja=runner_nombre_caja,
+                    monto=amount_transbank,
+                    client_id_sucursal=id_sucursal,
+                    client_nombre_caja=nombre_caja,
+                )
 
                 with self.tasks_lock:
                     event = threading.Event()
@@ -1408,7 +1364,8 @@ class APIServer:
                     "type": "transbank",
                     "id_terminal": terminal_id_transbank,
                     "amount": amount_transbank,
-                    "timeout": timeout_transbank
+                    "timeout": timeout_transbank,
+                    "ticket": ticket_transbank,
                 }
 
                 q = self.ensure_queue(runner_id_sucursal, runner_nombre_caja)
@@ -1428,15 +1385,16 @@ class APIServer:
                 wait_time = time.time() - start_wait
 
                 if not finished:
-                    with self.tasks_lock:
-                        self.tasks.pop(tx_id, None)
-                    self.internal_free_box(runner_id_sucursal, runner_nombre_caja, "timeout")
-                    logger.error("TIMEOUT tx=%s después de %.2fs", tx_id, wait_time)
+                    # Igual que Getnet: no se borra la tarea ni se libera la caja; el
+                    # worker la marca INDETERMINADA y, si el POS responde tarde, se
+                    # reconcilia sola. 409: no reintentar a ciegas.
+                    logger.error("DESCONOCIDO Transbank tx=%s después de %.2fs (sigue en proceso)", tx_id, wait_time)
                     return jsonify({
-                        "status": "timeout",
+                        "status": "desconocido",
                         "transaction_id": tx_id,
-                        "message": f"Timeout {timeout}s excedido (esperó {wait_time:.1f}s)"
-                    }), 504
+                        "message": "Estado desconocido: verificar comprobante en la máquina antes de reintentar. "
+                                   f"Consulte /pago/estado/{tx_id} para conocer el resultado final una vez disponible.",
+                    }), 409
 
                 with self.tasks_lock:
                     entry = self.tasks.pop(tx_id, {})
@@ -1597,6 +1555,7 @@ class APIServer:
             }), 500
 
         @app.route("/debug/queues")
+        @require_basic_auth
         def debug_queues():
             with self.queues_lock:
                 info = {}
@@ -1634,6 +1593,16 @@ class APIServer:
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
 
+            pendiente = tx_store.hay_pendiente_sin_resolver(id_sucursal, nombre_caja)
+            if pendiente:
+                logger.warning("Pago iniciar bloqueado: transacción previa sin resolver tx=%s", pendiente)
+                return jsonify({
+                    "status": "unresolved_previous_transaction",
+                    "message": "Hay una venta previa en esta caja sin confirmar. "
+                               "Debe resolverse desde el panel antes de intentar una nueva venta.",
+                    "pending_transaction_id": pendiente,
+                }), 409
+
             key = (id_sucursal, nombre_caja)
             with self.busy_lock:
                 if key in self.busy_boxes:
@@ -1658,6 +1627,17 @@ class APIServer:
                         self.busy_boxes.discard(key)
                     return jsonify({"error": "amount requerido"}), 400
 
+                ticket = time.strftime("%H%M%S")
+                tx_store.registrar_intento(
+                    tx_id=tx_id,
+                    tipo="transbank",
+                    ticket=ticket,
+                    terminal_id=id_terminal,
+                    id_sucursal=id_sucursal,
+                    nombre_caja=nombre_caja,
+                    monto=amount,
+                )
+
                 with self.tasks_lock:
                     self.tasks[tx_id] = {
                         "event": threading.Event(),
@@ -1678,7 +1658,8 @@ class APIServer:
                     "type": "transbank",
                     "id_terminal": id_terminal,
                     "amount": amount,
-                    "timeout": custom_timeout
+                    "timeout": custom_timeout,
+                    "ticket": ticket,
                 }
 
                 q = self.ensure_queue(id_sucursal, nombre_caja)
@@ -1737,6 +1718,10 @@ class APIServer:
                         # No confundir con RECHAZADO: el cliente pudo haber pagado
                         # igual en el POS y sigue pendiente de reconciliación.
                         estado = "INDETERMINADA"
+                        tx = tx_store.obtener(tx_id)
+                        if tx and tx.get("estado") not in tx_store.ESTADOS_SIN_RESOLVER:
+                            # Ya se reconcilió (monitor, respuesta tardía u operador).
+                            estado = tx.get("estado")
                     elif status == "timeout":
                         estado = "TIMEOUT"
                     else:
@@ -1790,6 +1775,42 @@ class APIServer:
                 self.busy_boxes.discard(key)
                 logger.info("Caja %s/%s liberada (%s)", id_sucursal, nombre_caja, reason)
 
+    def aplicar_resultado_tardio(self, tx_id, result):
+        """
+        El POS respondió después del timeout (hoy solo Transbank): si la transacción
+        sigue sin resolver, se actualiza con el resultado real y se libera la caja.
+        Si ya fue resuelta (p. ej. manualmente desde el panel) solo se deja registro.
+        """
+        tx = tx_store.obtener(tx_id)
+        if not tx:
+            return
+        estado = _estado_db(result)
+        if tx.get("estado") not in tx_store.ESTADOS_SIN_RESOLVER:
+            if tx.get("estado") != estado:
+                logger.warning(
+                    "Resultado tardío tx=%s (%s) difiere del estado ya resuelto (%s por %s)",
+                    tx_id, estado, tx.get("estado"), tx.get("resuelto_por"),
+                )
+                transbank_log.info(
+                    f"🚨 ATENCIÓN: el POS informó tarde la tx {tx_id} como {estado}, pero ya había sido "
+                    f"resuelta como {tx.get('estado')} por {tx.get('resuelto_por')}. Revisar manualmente."
+                )
+            return
+
+        tx_store.actualizar_estado(
+            tx_id, estado, raw_response=result,
+            nota="Resultado recibido del POS después del timeout",
+            resuelto_por="respuesta tardía del POS",
+        )
+        with self.tasks_lock:
+            entry = self.tasks.get(tx_id)
+            if entry:
+                entry["result"] = result
+                entry["estado"] = estado
+        with self.busy_lock:
+            self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+        logger.info("Resultado tardío aplicado tx=%s -> %s", tx_id, estado)
+
     def resolver_transaccion(self, tx_id, estado, resuelto_por, nota=None):
         """
         Resuelve (manual o automáticamente) una transacción PENDIENTE/INDETERMINADA:
@@ -1816,8 +1837,9 @@ class APIServer:
             self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
 
         logger.info("Resolución tx=%s -> %s por %s", tx_id, estado, resuelto_por)
-        if tx.get("tipo") == "getnet":
-            getnet_log.info(
+        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log}.get(tx.get("tipo"))
+        if _tipo_log:
+            _tipo_log.info(
                 f"👤 {resuelto_por or 'Un operador'} resolvió MANUALMENTE (mirando el comprobante del POS) el "
                 f"ticket {tx.get('ticket')} (tx {tx_id}) como {estado}. Nota: {nota_final}"
             )

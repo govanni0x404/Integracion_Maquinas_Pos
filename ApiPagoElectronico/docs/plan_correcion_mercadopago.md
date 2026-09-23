@@ -2,7 +2,7 @@
 
 Este documento es el checklist operativo para corregir SOLO la integración con Mercado Pago, manteniendo Transbank y Getnet sin cambios funcionales.
 
-Fuente de requisitos: [implementacion_mp_en_apipagoelectronico.md](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/docs/implementacion_mp_en_apipagoelectronico.md).
+Fuente de requisitos: [implementacion_mp_en_apipagoelectronico.md](../docs/implementacion_mp_en_apipagoelectronico.md).
 
 ## Objetivo
 
@@ -18,7 +18,7 @@ Fuente de requisitos: [implementacion_mp_en_apipagoelectronico.md](file:///Users
 
 ## Estado actual (resumen)
 
-- Existe flujo MP en [api_server.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/api_server.py) vía `process_mercadopago()` (crear orden + poll).
+- Existe flujo MP en [api_server.py](../server/api_server.py) vía `process_mercadopago()` (crear orden + poll).
 - `/pago` para `type=mercadopago` exige `access_token` en request (incompatible con el modo “frontend directo”).
 - CORS está habilitado en forma genérica, pero `OPTIONS` puede fallar por Basic Auth (preflight).
 
@@ -59,13 +59,18 @@ Fuente de requisitos: [implementacion_mp_en_apipagoelectronico.md](file:///Users
 
 ### Etapa 5 — Tests y herramientas
 
-- [x] Ajustar [test_mercadopago.sh](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/test_mercadopago.sh) para que NO envíe `access_token` (token viene desde `.env`).
+- [x] Ajustar [test_mercadopago.sh](../test_mercadopago.sh) para que NO envíe `access_token` (token viene desde `.env`).
 - [x] Validación rápida: `python -m compileall .` (sintaxis).
-- [ ] Prueba funcional con servicio corriendo: `/online` (mercadopago) y `/pago` (mercadopago) desde el frontend o curl.
+- [x] Prueba funcional con servicio corriendo: `/online` (mercadopago) y `/pago` (mercadopago) desde el frontend o curl.
+  - Hubo cobros reales el 2026-04-23 (terminal NEWLAND_N950); en el log técnico se ven 4 órdenes `processed` y 17 `canceled`.
+  - Tests automatizados en `tests/test_mercadopago.py`, contra una API de Orders simulada con las respuestas reales. Correr con `pytest`.
+- [x] **Bug corregido:** la API de Orders informa un cobro exitoso como `status: "processed"` + `status_detail: "accredited"`, no como `approved`. Por eso `/pago` devolvía `success: false` en ventas que sí estaban pagadas.
+  - `process_mercadopago` ahora normaliza ese caso a `status: "approved"`, que es el contrato documentado.
+  - El estado original de MP queda en `mp_status`.
 
 ### Etapa 6 — Cierre
 
-- [ ] Registrar cambios finales (resumen) y checklist completado.
+- [x] Registrar cambios finales (resumen) y checklist completado.
 
 ## Registro de avances
 
@@ -73,3 +78,11 @@ Fuente de requisitos: [implementacion_mp_en_apipagoelectronico.md](file:///Users
 
 - Completado: análisis inicial de Mercado Pago y definición de brechas.
 - Completado: cambios de configuración, CORS/preflight, `/online` MP y `/pago` MP (token desde env + respuesta normalizada).
+
+### 2026-09-23
+
+- Completado: suite `pytest` para `/online` y `/pago` con Mercado Pago (cobro aprobado, cancelado, error al crear la orden, timeout, token del request ignorado, validaciones).
+- Corregido: los cobros `processed/accredited` ahora se reconocen como aprobados.
+- `test_mercadopago.sh`:
+  - se quitó el access token de producción que estaba en el código. **Hay que revocarlo en el panel de Mercado Pago**, porque sigue en el historial de git;
+  - las credenciales Basic Auth se toman de `POS_API_USER`/`POS_API_PASS` o se piden por consola.

@@ -27,12 +27,14 @@ Los endpoints usados por la app web están protegidos con Basic Auth:
 
 Por lo tanto, el frontend debe enviar header `Authorization: Basic ...`.
 
-En este proyecto, las credenciales actualmente están hardcodeadas en [settings.py:L7-L8](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/config/settings.py#L7-L8) como `API_AUTH_USER` y `API_AUTH_PASS`.
+En este proyecto las credenciales están definidas en [settings.py](../config/settings.py):
+- `API_AUTH_USER` es el usuario.
+- `API_AUTH_PASS_HASH` es un hash PBKDF2 de la clave; la clave no se guarda en texto plano en el código.
 
 Implementación práctica en la app web:
 
 - En cada request al servicio local agrega `Authorization: Basic <base64(user:pass)>`
-- Donde `user`/`pass` son esos valores de `API_AUTH_USER`/`API_AUTH_PASS`
+- Donde `user` es `API_AUTH_USER` y `pass` es la clave de la API (la que corresponde a `API_AUTH_PASS_HASH`)
 
 ## 2) Flujo recomendado en el frontend
 

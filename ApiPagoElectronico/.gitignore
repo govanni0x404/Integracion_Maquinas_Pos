@@ -1,0 +1,34 @@
+# Entornos virtuales
+venv/
+venv_*/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Salidas de PyInstaller / Inno Setup
+build/
+dist/
+*.spec
+Instalador_*.exe
+
+# Configuración local de cada caja (puede contener MP_ACCESS_TOKEN)
+.env
+
+# Datos y archivos de runtime
+*.log
+*.db
+*.db-journal
+*.lock
+*.pid
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Salidas de error de .bat ejecutados fuera de Windows ("2>nul")
+nul
+nul_
+nul?
+_nul

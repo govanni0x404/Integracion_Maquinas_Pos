@@ -31,10 +31,10 @@ El servicio está pensado para correr como proceso “gateway” en cada máquin
 
 ## 3) Flujo de arranque (runtime)
 
-Implementado en [app.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/app.py).
+Implementado en [app.py](../app.py).
 
 1. Inicializa logging y ejecuta diagnóstico de credenciales (`_log_auth_diagnostics()`).
-2. Asegura instancia única mediante lock file (ver [singleton.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/core/singleton.py)).
+2. Asegura instancia única mediante lock file (ver [singleton.py](../core/singleton.py)).
 3. Intenta abrir reglas de firewall para el puerto HTTP configurado (especialmente relevante en Windows).
 4. Inicializa módulos:
    - Getnet: detección de puerto en segundo plano si `USAR_GETNET=true`.
@@ -44,7 +44,7 @@ Implementado en [app.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectr
 
 ## 4) Configuración (.env / variables de entorno)
 
-La carga de `.env` se resuelve en [settings.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/config/settings.py) buscando en ubicaciones compatibles con PyInstaller y modo desarrollo. Si `python-dotenv` no está disponible, usa un parser propio.
+La carga de `.env` se resuelve en [settings.py](../config/settings.py) buscando en ubicaciones compatibles con PyInstaller y modo desarrollo. Si `python-dotenv` no está disponible, usa un parser propio.
 
 Claves principales (con defaults):
 
@@ -68,7 +68,7 @@ Notas importantes:
 
 ## 5) Arquitectura del servidor (colas, tareas, agentes)
 
-Implementado en [api_server.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/api_server.py).
+Implementado en [api_server.py](../server/api_server.py).
 
 ### 5.1 Colas por sucursal/caja
 
@@ -116,7 +116,7 @@ Además existe un thread de limpieza que elimina transacciones viejas del diccio
 
 ### 6.1 Transbank POS (SDK + serial)
 
-Implementado en [pos_module.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/pos/pos_module.py).
+Implementado en [pos_module.py](../pos/pos_module.py).
 
 Puntos clave:
 
@@ -134,7 +134,7 @@ Puntos clave:
 
 ### 6.2 Getnet A920 Pro (serial + JSON firmado)
 
-Implementado en [getnet_module.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/pos/getnet_module.py).
+Implementado en [getnet_module.py](../pos/getnet_module.py).
 
 Puntos clave:
 
@@ -145,7 +145,7 @@ Puntos clave:
 
 ### 6.3 Mercado Pago (API HTTP)
 
-Implementado en [process_mercadopago](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/api_server.py#L21-L85).
+Implementado en [process_mercadopago](../server/api_server.py#L21-L85).
 
 Puntos clave:
 
@@ -155,7 +155,7 @@ Puntos clave:
 
 ## 7) Endpoints HTTP (principales)
 
-Servidor Flask arrancado en `0.0.0.0:<HTTP_PORT>` (ver [api_server.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/api_server.py#L1191-L1193)).
+Servidor Flask arrancado en `0.0.0.0:<HTTP_PORT>` (ver [api_server.py](../server/api_server.py#L1191-L1193)).
 
 ### 7.1 Panel y utilidades (sin Basic Auth)
 
@@ -177,7 +177,7 @@ Servidor Flask arrancado en `0.0.0.0:<HTTP_PORT>` (ver [api_server.py](file:///U
 
 ### 7.3 API de pagos (protegida con Basic Auth)
 
-La protección aplica vía `@require_basic_auth` (ver [auth.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/auth.py)).
+La protección aplica vía `@require_basic_auth` (ver [auth.py](../server/auth.py)).
 
 - `POST|GET /pago` → inicia y espera resultado (bloqueante hasta `timeout`).
   - Campos comunes: `id_sucursal`, `nombre_caja`, `type`.
@@ -203,7 +203,7 @@ La protección aplica vía `@require_basic_auth` (ver [auth.py](file:///Users/ca
 
 ## 8) Logging y observabilidad
 
-El logger principal se inicializa en [logging_config.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/core/logging_config.py). Determina el path del log según:
+El logger principal se inicializa en [logging_config.py](../core/logging_config.py). Determina el path del log según:
 
 - `LOG_FILE` absoluto (si está definido).
 - Si está empaquetado como `.app` (PyInstaller en macOS), coloca el log fuera del bundle.
@@ -218,7 +218,7 @@ El panel expone un preview del log vía `/panel/log`.
   - ejecutar `python app.py` (con dependencias instaladas).
   - definir `.env` en la raíz del proyecto o en el directorio de ejecución.
 - Empaquetado:
-  - hay scripts por plataforma; en macOS destaca [compilar_mac.sh](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/compilar_mac.sh) (PyInstaller `--onedir`, assets incluidos, soporte arm64).
+  - hay scripts por plataforma; en macOS destaca [compilar_mac.sh](../compilar_mac.sh) (PyInstaller `--onedir`, assets incluidos, soporte arm64).
   - el `.env` se copia a `dist/.env` para acompañar el bundle.
 
 ## 10) Hallazgos y puntos a revisar
@@ -241,11 +241,11 @@ El panel expone un preview del log vía `/panel/log`.
 
 ## 11) Mapa rápido de archivos clave
 
-- Inicio y wiring: [app.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/app.py)
-- Configuración: [settings.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/config/settings.py)
-- API HTTP y colas: [api_server.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/api_server.py)
-- Auth: [auth.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/server/auth.py)
-- Transbank: [pos_module.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/pos/pos_module.py)
-- Getnet: [getnet_module.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/pos/getnet_module.py)
-- UI: [tray_icon.py](file:///Users/carloscerda/Sites/localhost/apiPagoElectronico/ApiPagoElectronico/ui/tray_icon.py)
+- Inicio y wiring: [app.py](../app.py)
+- Configuración: [settings.py](../config/settings.py)
+- API HTTP y colas: [api_server.py](../server/api_server.py)
+- Auth: [auth.py](../server/auth.py)
+- Transbank: [pos_module.py](../pos/pos_module.py)
+- Getnet: [getnet_module.py](../pos/getnet_module.py)
+- UI: [tray_icon.py](../ui/tray_icon.py)
 
