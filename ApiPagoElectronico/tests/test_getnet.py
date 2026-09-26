@@ -406,3 +406,31 @@ def test_tx_id_del_cliente_validado(getnet_server):
     tx_store.registrar_intento("usado", "getnet", "1", "POS_TEST", "1", "CAJA_TEST", 1000)
     tx_store.actualizar_estado("usado", "APROBADO")
     assert c.post("/pago", json={**VENTA, "tx_id": "usado"}, headers=AUTH).status_code == 409
+
+
+def test_limite_de_espera_responde_indeterminada(getnet_server):
+    srv, fake = getnet_server
+    srv.esperar_resolucion_getnet = functools.partial(srv.esperar_resolucion_getnet, max_espera=0.3)
+    inicio = time.time()
+    t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-5"})
+    t.join(3)
+    assert not t.is_alive()
+    assert time.time() - inicio < 2
+    body = out["resp"].get_json()
+    assert body["estado"] == "INDETERMINADA"
+    assert "/pago/estado/venta-5" in body["message"]
+    # Sigue sin confirmar y bloqueando la caja; el monitor la puede retomar
+    assert tx_store.obtener("venta-5")["estado"] == "INDETERMINADA"
+    assert "venta-5" not in srv._esperando_getnet
+    assert srv.app.test_client().post("/pago", json=VENTA, headers=AUTH).status_code == 409
+
+
+def test_limite_cero_es_sin_limite(getnet_server):
+    srv, fake = getnet_server
+    srv.esperar_resolucion_getnet = functools.partial(srv.esperar_resolucion_getnet, max_espera=0)
+    t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-6"})
+    time.sleep(0.5)
+    assert t.is_alive()
+    srv.app.test_client().post("/pago/cancelar/venta-6", headers=AUTH)
+    t.join(3)
+    assert out["resp"].get_json()["estado"] == "INDETERMINADA"

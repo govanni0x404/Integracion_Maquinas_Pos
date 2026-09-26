@@ -90,9 +90,10 @@ def _find_and_load_dotenv():
                     "ID_SUCURSAL=1",
                     "NOMBRE_CAJA=",
                     "TERMINAL_ID=",
-                    "USAR_POS_FISICO=true",
+                    "USAR_POS_FISICO=false",
                     "PUERTOS_COM=COM5,COM6,COM7,COM8",
-                    "USAR_GETNET=false",
+                    "USAR_GETNET=true",
+                    "GETNET_MAX_ESPERA=300",
                     "MAX_TRANSACTION_TIME=90",
                     "TIMEOUT_SERVER=120",
                     "ALLOWED_ORIGINS=",
@@ -194,7 +195,7 @@ NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
 ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
 
 # POS físico
-USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "true").lower() == "true"
+USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "false").lower() == "true"
 PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM5,COM6,COM7,COM8")
 
 # Timeouts
@@ -213,12 +214,20 @@ ALLOWED_ORIGINS = [x.strip() for x in _allowed_origins_raw.split(",") if x.strip
 
 # GETNET POS
 # ¿Esta máquina tiene POS Getnet conectado?
-USAR_GETNET = os.environ.get("USAR_GETNET", "false").lower() == "true"
+USAR_GETNET = os.environ.get("USAR_GETNET", "true").lower() == "true"
 # Puerto COM fijo para el POS Getnet (ej. "COM3"). Si se deja vacío, se
 # detecta automáticamente probando todos los puertos disponibles. Útil para
 # diagnosticar cuando el dispositivo expone varios puertos COM (USB
 # compuesto) y hay que confirmar cuál es el que realmente procesa las ventas.
 GETNET_PORT = os.environ.get("GETNET_PORT", "").strip() or None
+# Segundos máximos que una petición /pago Getnet queda abierta esperando que el
+# POS vuelva (cable desconectado) cuando la venta quedó sin confirmar. Al
+# cumplirse responde INDETERMINADA y la validación sigue en segundo plano.
+# 0 o vacío = sin límite.
+try:
+    GETNET_MAX_ESPERA = max(0, int(os.environ.get("GETNET_MAX_ESPERA", "300").strip() or 0))
+except ValueError:
+    GETNET_MAX_ESPERA = 300
 
 # Feature detection helpers (runtime)
 def is_flask_available() -> bool:

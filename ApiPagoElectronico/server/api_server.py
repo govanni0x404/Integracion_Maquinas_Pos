@@ -27,6 +27,7 @@ from config.settings import (
     HTTP_PORT,
     USAR_POS_FISICO,
     USAR_GETNET,
+    GETNET_MAX_ESPERA,
 )
 from server.auth import require_basic_auth, check_basic_auth_header, check_local_panel_request
 from server.panel_html import PANEL_HTML
@@ -585,6 +586,10 @@ class APIServer:
             mp_token_configured = bool((env_vars.get("MP_ACCESS_TOKEN", "") or "").strip())
             env_vars_ui = dict(env_vars)
             env_vars_ui.pop("MP_ACCESS_TOKEN", None)
+            # Si el .env no los define, el panel muestra los valores por defecto
+            # con los que realmente corre el servicio (Getnet sí, Transbank no).
+            env_vars_ui.setdefault("USAR_POS_FISICO", "false")
+            env_vars_ui.setdefault("USAR_GETNET", "true")
             is_windows = platform.system() == "Windows"
 
             autostart_enabled = False
@@ -1855,19 +1860,24 @@ class APIServer:
             known_operation_ids=tx_store.operation_ids_conocidos("getnet", excluir_tx_id=tx.get("tx_id")),
         )
 
-    def esperar_resolucion_getnet(self, tx_id, cancel, intervalo=5, espera_tras_intento=15, reescaneo=30):
+    def esperar_resolucion_getnet(self, tx_id, cancel, intervalo=5, espera_tras_intento=15, reescaneo=30,
+                                  max_espera=None):
         """
         Mantiene viva una venta Getnet sin confirmar hasta conocer su resultado real.
         - Mientras el puerto del POS no aparece en el sistema (cable desconectado)
           solo se espera, sin tocar el puerto.
         - Cuando vuelve, se consulta al POS (reconciliar_getnet) y se repite hasta
           que dé APROBADO o RECHAZADO.
-        Termina antes si el cliente cancela la espera, si se detiene el servicio, o
-        si la transacción se resolvió por otra vía (panel / API).
+        Termina antes si el cliente cancela la espera, si se detiene el servicio,
+        si la transacción se resolvió por otra vía (panel / API), o al cumplirse
+        GETNET_MAX_ESPERA segundos (0 = sin límite). En esos casos la venta sigue
+        INDETERMINADA y el monitor la continúa validando en segundo plano.
         Devuelve el resultado ({"status": "success"|"failed", ...}) o None si se dejó de esperar.
         """
         with self._esperando_lock:
             self._esperando_getnet.add(tx_id)
+        max_espera = GETNET_MAX_ESPERA if max_espera is None else max_espera
+        limite = time.time() + max_espera if max_espera else None
         avisado = False
         ultimo_intento = 0.0
         try:
@@ -1880,6 +1890,13 @@ class APIServer:
                     return {"status": status, "reconciliado": True, "resuelto_por": tx.get("resuelto_por")}
                 if cancel.is_set() or self._stop_local_worker.is_set():
                     return None
+                if limite and time.time() >= limite:
+                    logger.warning("Espera Getnet tx=%s: se cumplió el máximo de %ss", tx_id, max_espera)
+                    getnet_log.info(
+                        f"⏱️ Se cumplió el tiempo máximo de espera ({max_espera // 60} min {max_espera % 60} s) "
+                        f"para la venta (tx {tx_id}). Se responde INDETERMINADA; se sigue validando en segundo plano."
+                    )
+                    return None
 
                 presente = self.getnet.puerto_presente()
                 if presente is False or (presente is None and time.time() - ultimo_intento < reescaneo):
@@ -1889,7 +1906,7 @@ class APIServer:
                             "La petición sigue abierta; se puede cancelar la espera con /pago/cancelar."
                         )
                         avisado = True
-                    cancel.wait(intervalo)
+                    cancel.wait(min(intervalo, max(0.0, limite - time.time())) if limite else intervalo)
                     continue
 
                 ultimo_intento = time.time()
@@ -1902,7 +1919,7 @@ class APIServer:
                         "reconciliado": True,
                         "reconcile_message": recon.get("message"),
                     }
-                cancel.wait(espera_tras_intento)
+                cancel.wait(min(espera_tras_intento, max(0.0, limite - time.time())) if limite else espera_tras_intento)
         finally:
             with self._esperando_lock:
                 self._esperando_getnet.discard(tx_id)

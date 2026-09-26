@@ -52,9 +52,9 @@ Claves principales (con defaults):
 - `ID_SUCURSAL` (default `1`): sucursal atendida por este servicio.
 - `NOMBRE_CAJA` (default `hostname`): caja local; se usa para “agente local”.
 - `ID_TERMINAL` (default `POS_<NOMBRE_CAJA>`): identificador de terminal.
-- `USAR_POS_FISICO` (default `true`): habilita Transbank POS físico.
+- `USAR_POS_FISICO` (default `false`): habilita Transbank POS físico.
 - `PUERTOS_COM` (default `COM5,COM6,COM7,COM8`): preferencia de puertos (Transbank).
-- `USAR_GETNET` (default `false`): habilita Getnet en la máquina.
+- `USAR_GETNET` (default `true`): habilita Getnet en la máquina.
 - `MAX_TRANSACTION_TIME` (default `90`): timeout de venta POS (worker) y operaciones POS.
 - `TIMEOUT_SERVER` (default `120`): timeout por defecto para espera HTTP.
 - Mercado Pago:

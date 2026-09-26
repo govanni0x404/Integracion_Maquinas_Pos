@@ -264,6 +264,7 @@ PANEL_HTML = """<!DOCTYPE html>
       'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
       'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
       'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
+      'GETNET_MAX_ESPERA': 'Segundos máximos que una venta Getnet sin confirmar (ej. cable desconectado) mantiene abierta la petición esperando que el POS vuelva. Al cumplirse responde INDETERMINADA y se sigue validando en segundo plano. 0 = sin límite. Default 300 (5 min).',
       'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
       'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
       'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"). Ej: https://mitienda.cl,https://otra.cl',
@@ -357,6 +358,12 @@ PANEL_HTML = """<!DOCTYPE html>
         <button type="button" id="btnDetectGetnet" class="btn btn-secondary" onclick="detectGetnetPort()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
       </div>
     </div>
+
+    <div class="param-row">
+      <span class="param-key">GETNET_MAX_ESPERA</span>
+      <input class="param-val" name="GETNET_MAX_ESPERA" value="{{ env_vars.get('GETNET_MAX_ESPERA', '300') }}" title="{{ hints['GETNET_MAX_ESPERA'] }}" autocomplete="off"
+             placeholder="segundos (0 = sin límite)">
+    </div>
     {{ terminal_id_field() }}
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
@@ -401,7 +408,7 @@ PANEL_HTML = """<!DOCTYPE html>
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
       Otros parámetros
     </div>
-    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST'] %}
+    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST'] %}
     {% for key, val in env_vars.items() %}
     {% if key not in known %}
     <div class="param-row">
