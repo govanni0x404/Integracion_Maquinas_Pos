@@ -223,8 +223,9 @@ if exist "%SCRIPT_DIR%\.env" (
 
     :: Eliminar credenciales del .env distribuido — siempre vienen del codigo compilado
     echo   Limpiando credenciales del .env de distribucion...
-    powershell -command "(Get-Content '%DIST_DIR%\.env') | Where-Object { $_ -notmatch '^\s*#?\s*API_AUTH_USER\s*=' -and $_ -notmatch '^\s*#?\s*API_AUTH_PASS\s*=' } | Set-Content '%DIST_DIR%\.env'"
-    echo   OK - API_AUTH_USER y API_AUTH_PASS eliminados del .env distribuido
+    powershell -command "(Get-Content '%DIST_DIR%\.env') | Where-Object { $_ -notmatch '^\s*#?\s*API_AUTH_(USER|PASS|PASS_HASH)\s*=' } | ForEach-Object { if ($_ -match '^\s*MP_ACCESS_TOKEN\s*=') { 'MP_ACCESS_TOKEN=' } else { $_ } } | Set-Content '%DIST_DIR%\.env'"
+    echo   OK - credenciales API eliminadas y MP_ACCESS_TOKEN vaciado en el .env distribuido
+    echo        ^(el token de Mercado Pago se configura en cada caja desde el panel^)
 )
 
 :: assets

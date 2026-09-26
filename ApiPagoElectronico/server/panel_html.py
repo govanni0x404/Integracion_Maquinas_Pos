@@ -568,6 +568,12 @@ function fmtFecha(ts) {
   return new Date(ts * 1000).toLocaleString('es-CL');
 }
 
+// Todo dato que viene del servidor se escapa antes de insertarlo como HTML:
+// notas, tickets y nombres de caja pueden venir de clientes de la API.
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 async function loadPendientes() {
   try {
     const r = await fetch('/panel/pendientes', { cache: 'no-store' });
@@ -585,19 +591,19 @@ async function loadPendientes() {
     box.innerHTML = items.map(tx => `
       <div class="param-row" style="flex-direction:column; align-items:stretch; gap:8px; padding:12px; border:1px solid var(--border, #333); border-radius:8px; margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">
-          <strong>${tx.tipo} · $${tx.monto ?? '-'}</strong>
-          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : ''}">${tx.estado}</span>
+          <strong>${esc(tx.tipo)} · $${esc(tx.monto ?? '-')}</strong>
+          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : ''}">${esc(tx.estado)}</span>
         </div>
         <div style="font-size:11px; color:var(--muted);">
-          tx: ${tx.tx_id}<br>
-          ticket: ${tx.ticket ?? '-'} · caja: ${tx.id_sucursal}/${tx.nombre_caja}<br>
-          creada: ${fmtFecha(tx.created_at)}
-          ${tx.nota ? `<br>nota: ${tx.nota}` : ''}
+          tx: ${esc(tx.tx_id)}<br>
+          ticket: ${esc(tx.ticket ?? '-')} · caja: ${esc(tx.id_sucursal)}/${esc(tx.nombre_caja)}<br>
+          creada: ${esc(fmtFecha(tx.created_at))}
+          ${tx.nota ? `<br>nota: ${esc(tx.nota)}` : ''}
         </div>
         <div class="actions" style="margin-top:0;">
-          <button class="btn btn-secondary" onclick="reconciliarTx('${tx.tx_id}')">🔄 Reconsultar POS</button>
-          <button class="btn btn-secondary" onclick="resolverTx('${tx.tx_id}', 'APROBADO')">✅ Marcar aprobada</button>
-          <button class="btn btn-secondary" onclick="resolverTx('${tx.tx_id}', 'RECHAZADO')">❌ Marcar rechazada</button>
+          <button class="btn btn-secondary" data-tx="${esc(tx.tx_id)}" onclick="reconciliarTx(this.dataset.tx)">🔄 Reconsultar POS</button>
+          <button class="btn btn-secondary" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'APROBADO')">✅ Marcar aprobada</button>
+          <button class="btn btn-secondary" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'RECHAZADO')">❌ Marcar rechazada</button>
         </div>
       </div>
     `).join('');
@@ -610,7 +616,7 @@ setInterval(loadPendientes, 8000);
 
 async function reconciliarTx(txId) {
   try {
-    const r = await fetch(`/panel/pendientes/${txId}/reconciliar`, { method: 'POST' });
+    const r = await fetch(`/panel/pendientes/${encodeURIComponent(txId)}/reconciliar`, { method: 'POST' });
     const j = await r.json();
     if (!j.ok) {
       showToast(j.error || 'No se pudo reconciliar', false);
@@ -627,7 +633,7 @@ async function resolverTx(txId, estado) {
   const nota = prompt(`Confirmá mirando el comprobante del POS. ¿Marcar esta transacción como ${estado}?\\nNota (opcional):`, '');
   if (nota === null) return;
   try {
-    const r = await fetch(`/panel/pendientes/${txId}/resolver`, {
+    const r = await fetch(`/panel/pendientes/${encodeURIComponent(txId)}/resolver`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ estado, nota })

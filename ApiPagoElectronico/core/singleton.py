@@ -101,6 +101,24 @@ def _terminate_pid(pid: int, wait_seconds: float) -> bool:
         pass
     return not _pid_exists(pid)
 
+def _es_nuestra_instancia(pid: int) -> bool:
+    """
+    ¿El PID del lock es realmente otra instancia de esta app? Tras un corte de luz
+    el lock queda huérfano y Windows puede reasignar ese PID a cualquier otro
+    programa: sin esta verificación se lo terminaba al arrancar.
+    Sin psutil no se puede verificar y se asume que sí (comportamiento anterior).
+    """
+    if not (_PSUTIL_AVAILABLE and psutil is not None):
+        return True
+    try:
+        proc = psutil.Process(pid)
+        nombre = (proc.name() or "").lower()
+        if getattr(sys, "frozen", False):
+            return nombre == Path(sys.executable).name.lower()
+        return "python" in nombre and any("app.py" in str(arg) for arg in proc.cmdline())
+    except Exception:
+        return False
+
 def _write_lock_for_current_pid():
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))
@@ -187,6 +205,12 @@ def ensure_single_instance_interactive(stop_existing_default=None, wait_seconds=
     # Verifica si el proceso realmente existe
     if not _pid_exists(existing_pid):
         logger.info(f"Se encontró lock huérfano de un PID inexistente ({existing_pid}). Se sobreescribe.")
+        _write_lock_for_current_pid()
+        return True
+
+    if not _es_nuestra_instancia(existing_pid):
+        _, label = _process_info(existing_pid)
+        logger.warning(f"Lock huérfano: el PID {existing_pid} ahora es otro programa ({label}). No se toca; se sobreescribe el lock.")
         _write_lock_for_current_pid()
         return True
 

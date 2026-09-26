@@ -133,3 +133,34 @@ def listar_no_resueltas():
             ESTADOS_SIN_RESOLVER,
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def operation_ids_conocidos(tipo, excluir_tx_id=None, limite=200):
+    """
+    OperationId (número de comprobante del POS) de las ventas ya resueltas de
+    este tipo. Sirve para reconocer que el "último comprobante" del POS es de
+    una venta anterior y no de la que se está reconciliando.
+    """
+    with _lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT raw_response FROM transacciones
+            WHERE tipo = ? AND tx_id != ? AND raw_response IS NOT NULL
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (tipo, excluir_tx_id or "", limite),
+        ).fetchall()
+    ids = set()
+    for row in rows:
+        try:
+            raw = json.loads(row["raw_response"])
+        except (TypeError, ValueError):
+            continue
+        resp = raw.get("response") if isinstance(raw, dict) else None
+        if not isinstance(resp, dict):
+            continue
+        for k, v in resp.items():
+            if k.lower() == "operationid" and v not in (None, "", 0, "0"):
+                ids.add(str(v))
+    return ids
