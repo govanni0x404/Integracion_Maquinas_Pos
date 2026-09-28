@@ -78,12 +78,7 @@ def _find_and_load_dotenv():
 
     if not candidates:
         try:
-            exe_dir = Path(sys.executable).parent
-            target_dir = exe_dir
-            parts = exe_dir.parts
-            if "Contents" in parts and "MacOS" in parts:
-                target_dir = exe_dir.parent.parent.parent
-            env_path = target_dir / ".env"
+            env_path = Path(sys.executable).parent / ".env"
             if not env_path.exists():
                 default_env = "\n".join([
                     "HTTP_PORT=5005",
@@ -207,6 +202,9 @@ ALLOWED_MP = set([x.strip() for x in os.environ.get("ALLOWED_MP", "").split(",")
 MP_API_URL = os.environ.get("MP_API_URL", "https://api.mercadopago.com/v1/orders")
 MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN", "")
 MP_TERMINAL_ID = os.environ.get("MP_TERMINAL_ID", "")
+# Terminales Point de esta caja, separados por coma (ej. "NEWLAND_N950__A,NEWLAND_N950__B").
+# Es independiente de TERMINAL_ID (Getnet/Transbank): nunca se usa uno por el otro.
+MP_TERMINALES = [t.strip() for t in MP_TERMINAL_ID.split(",") if t.strip()]
 ALLOW_MP_TOKEN_IN_REQUEST = os.environ.get("ALLOW_MP_TOKEN_IN_REQUEST", "false").lower() == "true"
 
 _allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
@@ -228,26 +226,3 @@ try:
     GETNET_MAX_ESPERA = max(0, int(os.environ.get("GETNET_MAX_ESPERA", "300").strip() or 0))
 except ValueError:
     GETNET_MAX_ESPERA = 300
-
-# Feature detection helpers (runtime)
-def is_flask_available() -> bool:
-    try:
-        import flask
-        return True
-    except Exception:
-        return False
-
-def is_transbank_available() -> bool:
-    try:
-        import transbank
-        return True
-    except Exception:
-        return False
-
-def is_systray_available() -> bool:
-    try:
-        import pystray
-        import PIL
-        return True
-    except Exception:
-        return False

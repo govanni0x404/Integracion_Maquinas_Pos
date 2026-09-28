@@ -130,7 +130,7 @@ def main():
         try:
             server.stop_local_worker()
             server.stop_cleanup_task()
-            server.stop_getnet_reconciliation_monitor()
+            server.stop_reconciliation_monitor()
         except Exception:
             pass
         pos_module.stop_monitor()
@@ -151,12 +151,12 @@ def main():
     else:
         _notify_windows(APP_NAME, f"Servicio arrancando (puerto {HTTP_PORT})")
 
-    # 6. Tray icon en el MAIN THREAD (requerido por macOS NSApplicationMain)
+    # 6. Tray icon en el MAIN THREAD
     try:
         tray = TrayIcon(pos_module)
         if SYSTRAY_AVAILABLE:
-            logger.info("Iniciando tray icon en hilo principal (macOS)...")
-            tray.run_blocking()  # Bloqueante en main thread — correcto en macOS
+            logger.info("Iniciando tray icon en hilo principal...")
+            tray.run_blocking()
         else:
             logger.warning("pystray no disponible — esperando Flask en foreground")
             flask_thread.join()  # Fallback: esperar Flask si no hay tray

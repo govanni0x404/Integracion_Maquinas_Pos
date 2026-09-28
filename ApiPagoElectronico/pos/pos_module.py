@@ -13,7 +13,6 @@ from core.business_logging import transbank_log, fmt_monto
 logger = logging.getLogger(APP_NAME)
 
 try:
-    #from transbank import POSIntegrado
     from transbank.POS.POSIntegrado import POSIntegrado
     TRANSBANK_AVAILABLE = True
     logger.info("SDK Transbank importado correctamente")
@@ -42,7 +41,6 @@ class POSModule:
         self.lock = threading.Lock()
         self._stop_monitor = threading.Event()
         self.monitor_thread = None
-        self.last_ok = 0
         self._is_online = False
 
     def is_online(self):
@@ -139,7 +137,6 @@ class POSModule:
                         self.current_port = p
                         self._is_online = True
 
-                    self.last_ok = time.time()
                     return p
                 else:
                     logger.warning("Puerto %s no respondió al poll", p)
@@ -159,43 +156,6 @@ class POSModule:
             self.current_port = None
             self._is_online = False
         return None
-
-        #         if not pos.open_port(p):
-        #             logger.warning("No se pudo abrir puerto %s", p)  # ← CAMBIAR A WARNING
-        #             continue
-
-        #         logger.info("Puerto %s abierto, ejecutando poll...", p)  # ← AGREGAR ESTE LOG
-                
-        #         if pos.poll():
-        #             try:
-        #                 pos.close_port()
-        #             except Exception:
-        #                 pass
-
-        #             logger.info("✓ POS detectado en %s", p)
-        #             with self.lock:
-        #                 self.current_port = p
-        #                 self._is_online = True
-
-        #             self.last_ok = time.time()
-        #             return p
-        #         else:
-        #             logger.warning("Puerto %s no respondió al poll", p)  # ← CAMBIAR A WARNING
-                    
-        #     except Exception as e:
-        #         logger.warning("Puerto %s error: %s\n%s", p, e, traceback.format_exc())  # ← CAMBIAR A WARNING y AGREGAR TRACEBACK
-        #     finally:
-        #         try:
-        #             if pos:
-        #                 pos.close_port()
-        #         except Exception as ex:
-        #             logger.debug("Error cerrando puerto %s: %s", p, ex)  # ← AGREGAR LOG
-
-        # logger.warning("No se detectó POS en los puertos listados")
-        # with self.lock:
-        #     self.current_port = None
-        #     self._is_online = False
-        # return None
 
     def get_current_port(self):
         with self.lock:
@@ -222,7 +182,6 @@ class POSModule:
             logger.info("Respuesta POS: %s", res)
 
             if res.get("response_code") in ("0", "00"):
-                self.last_ok = time.time()
                 transbank_log.info(
                     f"✅ Venta APROBADA — ticket {ticket} — monto {fmt_monto(amount)} — "
                     f"autorización {res.get('authorization_code')}"
@@ -376,14 +335,6 @@ class POSModule:
             pass
         logger.info("Monitor POS detenido")
 
-    def restart(self):
-        """Reinicia el módulo del POS."""
-        logger.info("Reiniciando POS module (clear port + redetect)...")
-        with self.lock:
-            self.current_port = None
-            self._is_online = False
-        return self.detect_port()
-    
     def open_port_and_refund(self, port, operation_id):
         if not TRANSBANK_AVAILABLE:
             return {"status": "error", "message": "Transbank SDK no disponible"}
@@ -402,7 +353,6 @@ class POSModule:
             logger.info("Respuesta anulación POS: %s", res)
 
             if res.get("response_code") in ("0", "00"):
-                self.last_ok = time.time()
                 transbank_log.info(f"✅ Anulación APROBADA — operación {operation_id}")
                 return {"status": "success", "response": res}
             else:
@@ -471,7 +421,6 @@ class POSModule:
             logger.info("Respuesta detalle POS: %s", res)
 
             if res.get("response_code") in ("0", "00"):
-                self.last_ok = time.time()
                 transbank_log.info(f"↪️ Detalle obtenido correctamente — puerto {port}")
                 return {"status": "success", "response": res}
             else:

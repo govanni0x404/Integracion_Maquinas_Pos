@@ -11,25 +11,15 @@ def _get_log_dir():
 
     Orden de prioridad:
     1. LOG_FILE absoluto en variables de entorno
-    2. Junto al ejecutable IF es bundle PyInstaller (.app/Contents/MacOS/)
-    3. Raíz del proyecto Python (directorio de app.py / main script)
-    4. CWD
+    2. Raíz del proyecto Python (directorio de app.py / main script)
+    3. CWD (en el .exe compilado es la carpeta del .env, junto al ejecutable)
     """
     # 1. LOG_FILE absoluto en env vars
     env_log = os.environ.get("LOG_FILE", "")
     if env_log and os.path.isabs(env_log):
         return Path(env_log).parent, Path(env_log).name
 
-    exe_path = Path(sys.executable)
-    exe_dir  = exe_path.parent
-
-    # 2. Bundle PyInstaller en .app macOS → subir afuera del bundle
-    parts = exe_dir.parts
-    if "Contents" in parts and "MacOS" in parts:
-        outside_dir = exe_dir.parent.parent.parent  # MacOS→Contents→.app→dist/
-        return outside_dir, "pos_gateway.log"
-
-    # 3. Modo desarrollo: usar el directorio del script principal (sys.argv[0])
+    # 2. Modo desarrollo: usar el directorio del script principal (sys.argv[0])
     #    sys.executable en venv apunta a venv/bin/python3 — NO es útil para paths
     try:
         main_script = Path(sys.argv[0]).resolve()
@@ -39,7 +29,7 @@ def _get_log_dir():
     except Exception:
         pass
 
-    # 4. CWD fallback
+    # 3. CWD fallback
     return Path(os.getcwd()), env_log or "pos_gateway.log"
 
 _log_dir, _log_filename = _get_log_dir()

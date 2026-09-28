@@ -285,6 +285,9 @@ class FakeGetnet:
     def is_online(self):
         return self.conectado
 
+    def solicitar_cancelacion(self):
+        return False
+
     def get_current_port(self):
         return "COM_GETNET"
 
@@ -303,7 +306,7 @@ def getnet_server():
     yield srv, fake
     srv._stop_local_worker.set()
     srv._stop_cleanup.set()
-    srv._stop_getnet_monitor.set()
+    srv._stop_recon_monitor.set()
 
 
 def _pago_en_segundo_plano(srv, body):
@@ -434,3 +437,182 @@ def test_limite_cero_es_sin_limite(getnet_server):
     srv.app.test_client().post("/pago/cancelar/venta-6", headers=AUTH)
     t.join(3)
     assert out["resp"].get_json()["estado"] == "INDETERMINADA"
+
+
+# ── Cancelar Venta (Command 116) ──────────────────────────────
+
+import json  # noqa: E402
+
+
+def _trama(**resp):
+    inner = json.dumps(resp, separators=(",", ":"))
+    return json.dumps({"JsonSerialized": inner, "Sign": "X"}, separators=(",", ":")) + "\r\n"
+
+
+class PosSimulado:
+    """Puerto serie de un POS Getnet: la caja pide cancelar apenas empieza a
+    esperar la venta, y el POS contesta el 116 con `al_116`."""
+    is_open = True
+
+    def __init__(self, mod, al_116):
+        self.mod = mod
+        self.al_116 = al_116
+        self.buf = ""
+        self.enviados = []
+        self.cancelacion_pedida = False
+
+    @property
+    def in_waiting(self):
+        if self.enviados == [100] and not self.cancelacion_pedida:
+            self.cancelacion_pedida = True
+            assert self.mod.solicitar_cancelacion() is True
+        return len(self.buf)
+
+    def read(self, n):
+        data, self.buf = self.buf[:n], self.buf[n:]
+        return data.encode()
+
+    def write(self, data):
+        comando = json.loads(json.loads(data)["JsonSerialized"])["Command"]
+        self.enviados.append(comando)
+        if comando == 116:
+            self.buf += "".join(self.al_116)
+
+    def flush(self):
+        pass
+
+
+def _venta_con_pos(monkeypatch, al_116, timeout=5):
+    mod = GetnetModule()
+    pos = PosSimulado(mod, al_116)
+
+    def conectar():
+        mod.serial_connection = pos
+        return True
+    monkeypatch.setattr(mod, "connect", conectar)
+    monkeypatch.setattr(mod, "disconnect", lambda: None)
+    monkeypatch.setattr(gm, "ESPERA_TRAS_CANCELAR_SEGUNDOS", 0.3)
+    return mod.do_sale_with_timeout(1000, timeout=timeout, ticket="1"), pos, mod
+
+
+def test_cancelar_venta_aceptada_por_el_pos(monkeypatch):
+    res, pos, mod = _venta_con_pos(monkeypatch, [_trama(FunctionCode=116, ResponseCode=0, ResponseMessage="Aprobado")])
+    assert pos.enviados == [100, 116]
+    assert res["status"] == "failed"
+    assert res["cancelada_desde_caja"] is True
+    assert mod.solicitar_cancelacion() is False  # la venta ya terminó
+
+
+def test_cancelar_venta_con_respuesta_1006_del_pos(monkeypatch):
+    res, pos, _ = _venta_con_pos(monkeypatch, [
+        _trama(FunctionCode=116, ResponseCode=0, ResponseMessage="Aprobado"),
+        _trama(FunctionCode=100, ResponseCode=1006, ResponseMessage="Cancelado por POS"),
+    ])
+    assert res["status"] == "failed"
+    assert res["response"]["ResponseCode"] == 1006
+
+
+def test_cancelacion_rechazada_sigue_esperando_la_venta(monkeypatch):
+    # El cliente ya ingresó el PIN: el POS no cancela y la venta se aprueba igual
+    res, _, _ = _venta_con_pos(monkeypatch, [
+        _trama(FunctionCode=116, ResponseCode=1, ResponseMessage="No se puede cancelar"),
+        _trama(FunctionCode=100, ResponseCode=0, AuthorizationCode="AB12"),
+    ])
+    assert res["status"] == "success"
+
+
+def test_cancelacion_rechazada_sin_resultado_queda_indeterminada(monkeypatch):
+    res, _, _ = _venta_con_pos(monkeypatch, [_trama(FunctionCode=116, ResponseCode=1)], timeout=1)
+    assert res["status"] == "indeterminada"
+
+
+def test_solicitar_cancelacion_sin_venta_en_curso():
+    assert GetnetModule().solicitar_cancelacion() is False
+
+
+# ── Detección de puerto ───────────────────────────────────────
+
+def test_is_online_no_sondea_si_el_puerto_esta_tomado(monkeypatch):
+    mod = GetnetModule()
+    mod.port = None
+    mod._ultimo_puerto = "COM7"
+    monkeypatch.setattr(gm.serial.tools.list_ports, "comports",
+                        lambda: [type("P", (), {"device": "COM7"})()])
+
+    def no_sondear(*a, **kw):
+        raise AssertionError("no se debe sondear con una venta en curso")
+    monkeypatch.setattr(mod, "_find_getnet_port", no_sondear)
+    with mod._serial_lock:
+        assert mod.is_online() is True
+
+
+def test_deteccion_nunca_sondea_puertos_ajenos(monkeypatch):
+    mod = GetnetModule()
+    mod._port_cache = None
+    mod.puertos_ajenos = lambda: ["COM1"]
+    puerto = lambda dev: type("P", (), {"device": dev, "description": "USB Serial"})()
+    monkeypatch.setattr(gm.serial.tools.list_ports, "comports", lambda: [puerto("COM1"), puerto("COM2")])
+    sondeados = []
+    monkeypatch.setattr(mod, "_test_port_connection", lambda p: sondeados.append(p) or p == "COM2")
+    assert mod._find_getnet_port() == "COM2"
+    assert sondeados == ["COM2"]
+
+
+def test_api_excluye_el_puerto_de_transbank(monkeypatch):
+    from server.api_server import APIServer
+    monkeypatch.setattr("server.api_server.USAR_POS_FISICO", True)
+    fake = FakeGetnet()
+    srv = APIServer(FakePOS(), fake)
+    try:
+        assert fake.puertos_ajenos() == ["COM_TEST"]
+    finally:
+        srv._stop_local_worker.set()
+        srv._stop_cleanup.set()
+        srv._stop_recon_monitor.set()
+
+
+class FakeGetnetCancelable(FakeGetnet):
+    """La venta queda esperando en el POS hasta que la caja pide cancelarla."""
+
+    def __init__(self):
+        super().__init__()
+        self.en_curso = threading.Event()
+        self.cancelar = threading.Event()
+
+    def do_sale_with_timeout(self, amount, timeout=30, ticket=None):
+        self.en_curso.set()
+        if self.cancelar.wait(3):
+            return {"status": "failed", "cancelada_desde_caja": True, "ticket": ticket,
+                    "response": {"FunctionCode": 116, "ResponseCode": 0}}
+        return {"status": "indeterminada", "ticket": ticket}
+
+    def solicitar_cancelacion(self):
+        if not self.en_curso.is_set():
+            return False
+        self.cancelar.set()
+        return True
+
+
+def test_cancelar_pide_116_y_libera_la_caja():
+    from server.api_server import APIServer
+    fake = FakeGetnetCancelable()
+    srv = APIServer(FakePOS(), fake)
+    try:
+        t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-116"})
+        assert fake.en_curso.wait(3)
+
+        r = srv.app.test_client().post("/pago/cancelar/venta-116", headers=AUTH)
+        assert r.status_code == 200
+        assert r.get_json()["estado"] == "RECHAZADO"
+        t.join(3)
+        assert out["resp"].get_json()["estado"] == "RECHAZADO"
+        assert tx_store.obtener("venta-116")["estado"] == "RECHAZADO"
+
+        # No quedó nada sin confirmar: la caja puede vender de nuevo
+        fake.venta = {"status": "success", "response": {"ResponseCode": 0}}
+        fake.do_sale_with_timeout = lambda amount, timeout=30, ticket=None: {**fake.venta, "ticket": ticket}
+        assert srv.app.test_client().post("/pago", json=VENTA, headers=AUTH).get_json()["estado"] == "APROBADO"
+    finally:
+        srv._stop_local_worker.set()
+        srv._stop_cleanup.set()
+        srv._stop_recon_monitor.set()

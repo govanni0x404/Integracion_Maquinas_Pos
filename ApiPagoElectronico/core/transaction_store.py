@@ -101,6 +101,15 @@ def actualizar_estado(tx_id, estado, raw_response=None, nota=None, resuelto_por=
         conn.commit()
 
 
+def asignar_ticket(tx_id, ticket):
+    """Guarda la referencia del cobro en el medio de pago cuando se conoce después
+    de registrar el intento (ej. el id de la orden de Mercado Pago)."""
+    with _lock:
+        conn = _get_conn()
+        conn.execute("UPDATE transacciones SET ticket = ? WHERE tx_id = ?", (ticket, tx_id))
+        conn.commit()
+
+
 def obtener(tx_id):
     with _lock:
         conn = _get_conn()

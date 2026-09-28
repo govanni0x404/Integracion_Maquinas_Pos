@@ -5,14 +5,5 @@ plyer==2.1.0
 pillow==12.3.0
 pyserial==3.5
 python-dotenv==1.2.2
-requests==2.33.0
 transbank-pos-sdk==1.0.1
-#transbank-sdk==6.1.0
-
-# Bandeja del sistema — solo se instala en la plataforma correcta
-rumps==0.4.0          ; sys_platform == "darwin"   # macOS: barra de menú nativa
-pystray==0.19.5       ; sys_platform != "darwin"   # Windows / Linux: system tray
-
-# Uso:
-#   pip install -r requirements.txt
-#   pip freeze > requirements.txt  (para actualizar)
+pystray==0.19.5

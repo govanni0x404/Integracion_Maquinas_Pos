@@ -6,6 +6,7 @@ import threading
 import queue
 import logging
 import traceback
+import http.client
 import urllib.request
 import urllib.error
 
@@ -19,7 +20,7 @@ from config.settings import (
     ID_TERMINAL,
     MP_API_URL,
     MP_ACCESS_TOKEN,
-    MP_TERMINAL_ID,
+    MP_TERMINALES,
     ALLOW_MP_TOKEN_IN_REQUEST,
     ALLOWED_ORIGINS,
     TIMEOUT_SERVER,
@@ -37,6 +38,10 @@ from core.business_logging import getnet_log, transbank_log, mercadopago_log, fm
 
 
 logger = logging.getLogger(APP_NAME)
+
+# Cuánto espera /pago/cancelar a que el POS Getnet responda al Command 116
+# antes de dejar la venta INDETERMINADA (el cliente pudo haber ingresado el PIN).
+ESPERA_CANCELACION_GETNET = 20
 
 def _http_json(method: str, url: str, headers: dict | None = None, payload: dict | None = None, timeout: int = 15):
     data = None
@@ -82,6 +87,21 @@ def _estado_db(result):
     }.get((result or {}).get("status"), "RECHAZADO")
 
 
+# Estados de una orden Point en los que ya no se puede cobrar: el resultado es
+# definitivo. Cualquier otro estado (created, at_terminal, action_required o uno
+# que MP agregue en el futuro) se trata como "el cliente todavía puede pagar".
+MP_ESTADOS_FINALES = ("processed", "canceled", "expired", "failed", "refunded", "rejected", "approved", "success")
+# Para el log de negocio: qué significa cada estado intermedio de la orden.
+MP_DESCRIPCION_ESTADOS = {
+    "created": "orden enviada, esperando que el terminal la tome",
+    "at_terminal": "el cobro está en pantalla del terminal, esperando al cliente",
+    "action_required": "el terminal pide una acción al cliente",
+}
+MP_REINTENTOS_CREACION = 3
+MP_PAUSA_REINTENTO = 2
+MP_INTERVALO_CONSULTA = 3
+
+
 def _mp_aprobado(order_info):
     """
     La API de Orders de Mercado Pago informa un cobro exitoso como
@@ -94,19 +114,233 @@ def _mp_aprobado(order_info):
     return status == "processed" and (order_info or {}).get("status_detail") in (None, "accredited")
 
 
-def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVER, idempotency_key=None, external_reference=None):
+def _mp_headers(access_token, idempotency_key=None):
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    if idempotency_key:
+        headers["X-Idempotency-Key"] = idempotency_key
+    return headers
+
+
+def _error_de_red_ambiguo(e):
+    """True si, pese al error, el pedido pudo haber llegado a Mercado Pago
+    (timeout o conexión cortada después de enviarlo). Un DNS caído o una
+    conexión rechazada, en cambio, garantizan que no salió nada."""
+    reason = getattr(e, "reason", e)
+    return isinstance(reason, (TimeoutError, ConnectionResetError, http.client.HTTPException))
+
+
+def _mp_describir_error(code, body):
+    """Texto legible para el log de negocio a partir de una respuesta de error de MP."""
+    if code is None:
+        return f"sin respuesta de Mercado Pago ({(body or {}).get('message', 'error de red')})"
+    if code == 401:
+        return "HTTP 401: el MP_ACCESS_TOKEN es inválido o está vencido"
+    if code == 403:
+        return "HTTP 403: el token no tiene permiso sobre este terminal (¿terminal de otra cuenta?)"
+    if code == 404:
+        return "HTTP 404: Mercado Pago no encuentra el recurso (¿terminal_id mal escrito o no vinculado?)"
+    if code == 429:
+        return "HTTP 429: demasiadas solicitudes a Mercado Pago"
+    detalle = ""
+    if isinstance(body, dict):
+        errores = body.get("errors")
+        if isinstance(errores, list) and errores:
+            detalle = "; ".join(
+                str(e.get("message") or e.get("code") or e.get("details") or e) if isinstance(e, dict) else str(e)
+                for e in errores
+            )
+        detalle = detalle or str(body.get("message") or body.get("error") or "")
+    return f"HTTP {code}" + (f": {detalle}" if detalle else "")
+
+
+def _mp_detalle_pago(order_info):
+    """Resumen del pago de la orden para el log (id, medio, cuotas, motivo)."""
+    pagos = ((order_info or {}).get("transactions") or {}).get("payments") or []
+    pago = pagos[0] if pagos and isinstance(pagos[0], dict) else {}
+    medio = pago.get("payment_method") or {}
+    partes = []
+    if pago.get("id"):
+        partes.append(f"pago {pago['id']}")
+    if medio.get("id") or medio.get("type"):
+        partes.append("medio " + " / ".join(str(x) for x in (medio.get("id"), medio.get("type")) if x))
+    if medio.get("installments"):
+        partes.append(f"{medio['installments']} cuota(s)")
+    if pago.get("reference_id"):
+        partes.append(f"referencia {pago['reference_id']}")
+    detalle = pago.get("status_detail") or (order_info or {}).get("status_detail")
+    if detalle:
+        partes.append(f"detalle {detalle}")
+    return " — ".join(partes)
+
+
+def _mp_crear_orden(payload, access_token, idempotency_key, ctx=""):
+    """
+    Crea la orden reintentando ante errores de red, 429 y 5xx. Es seguro
+    reintentar: con la misma X-Idempotency-Key MP devuelve la orden ya creada
+    en vez de crear otra.
+    Returns: (http_status|None, body, ambiguo). ambiguo=True si, sin respuesta
+    exitosa, la orden igual pudo haberse creado.
+    """
+    ambiguo = False
+    code, body = None, {}
+    for intento in range(1, MP_REINTENTOS_CREACION + 1):
+        try:
+            code, body = _http_json("POST", MP_API_URL, headers=_mp_headers(access_token, idempotency_key),
+                                    payload=payload, timeout=15)
+        except Exception as e:
+            ambiguo = ambiguo or _error_de_red_ambiguo(e)
+            code, body = None, {"message": str(e)}
+            logger.warning("Creando orden MP (intento %s/%s): error de red %s", intento, MP_REINTENTOS_CREACION, e)
+        else:
+            if code in (200, 201) and isinstance(body, dict) and body.get("id"):
+                return code, body, False
+            if 400 <= code < 500 and code != 429:
+                return code, body, False  # MP la rechazó: no se creó
+            ambiguo = ambiguo or code >= 500
+            logger.warning("Creando orden MP (intento %s/%s): HTTP %s %s", intento, MP_REINTENTOS_CREACION, code, body)
+        if intento < MP_REINTENTOS_CREACION:
+            mercadopago_log.info(
+                f"↪️ Crear la orden falló ({ctx}) — intento {intento}/{MP_REINTENTOS_CREACION}: "
+                f"{_mp_describir_error(code, body)}. Se reintenta con la misma clave de idempotencia "
+                "(no se duplica el cobro)..."
+            )
+            time.sleep(MP_PAUSA_REINTENTO)
+    return code, body, ambiguo
+
+
+def _mp_consultar_orden(order_id, access_token):
+    """
+    Estado actual de la orden.
+    Returns: (orden, None) o (None, motivo) si no se pudo saber (red, 401, 5xx...).
+    """
+    try:
+        code, info = _http_json("GET", f"{MP_API_URL}/{order_id}", headers=_mp_headers(access_token), timeout=10)
+    except Exception as e:
+        logger.warning("No se pudo consultar la orden MP %s: %s", order_id, e)
+        return None, _mp_describir_error(None, {"message": str(e)})
+    if code != 200 or not isinstance(info, dict) or not info.get("status"):
+        logger.warning("Consulta de la orden MP %s respondió HTTP %s: %s", order_id, code, info)
+        return None, _mp_describir_error(code, info)
+    return info, None
+
+
+def _mp_cancelar_orden(order_id, access_token):
+    """Pide a MP cancelar la orden. Solo lo acepta mientras el cliente no haya
+    pagado. Returns: (orden, None) si MP la devolvió, o (None, motivo)."""
+    try:
+        code, body = _http_json("POST", f"{MP_API_URL}/{order_id}/cancel",
+                                headers=_mp_headers(access_token, f"cancel_{order_id}"), timeout=10)
+    except Exception as e:
+        logger.warning("No se pudo cancelar la orden MP %s: %s", order_id, e)
+        return None, _mp_describir_error(None, {"message": str(e)})
+    if code in (200, 201) and isinstance(body, dict):
+        return body, None
+    logger.warning("MP no canceló la orden %s: HTTP %s %s", order_id, code, body)
+    return None, _mp_describir_error(code, body)
+
+
+def _mp_resultado_final(order_info, order_id, ctx):
+    status = order_info.get("status")
+    logger.info("Respuesta final MercadoPago: %s", json.dumps(order_info, ensure_ascii=False))
+    aprobado = _mp_aprobado(order_info)
+    detalle = _mp_detalle_pago(order_info)
+    if aprobado:
+        mercadopago_log.info(f"✅ Cobro APROBADO — orden {order_id} — {ctx}" + (f" — {detalle}" if detalle else ""))
+    else:
+        mercadopago_log.info(
+            f"⛔ Cobro NO realizado — orden {order_id} — {ctx} — estado {status}"
+            + (f" — {detalle}" if detalle else "") + ". No se cobró: es seguro reintentar."
+        )
+    # Se normaliza a "approved" (contrato documentado para el cliente web);
+    # el estado original de MP queda en mp_status y en response.
+    return {
+        "status": "approved" if aprobado else status,
+        "mp_status": status,
+        "order_id": order_id,
+        "response": order_info,
+    }
+
+
+def _mp_cerrar_orden_pendiente(order_id, access_token, ctx, motivo):
+    """
+    Se dejó de esperar (timeout o cancelación del cliente) con la orden todavía
+    abierta en el terminal: si queda así, el cliente puede pagar después y el
+    cobro no queda registrado. Se cancela en MP y se vuelve a consultar; si no
+    se logra cerrar (el cliente ya está pagando), queda INDETERMINADA y la
+    termina de confirmar el monitor de reconciliación.
+    """
+    mercadopago_log.info(f"✋ {motivo} — se pide a Mercado Pago cancelar la orden {order_id} ({ctx})...")
+    info, error = _mp_cancelar_orden(order_id, access_token)
+    if (info or {}).get("status") in MP_ESTADOS_FINALES:
+        mercadopago_log.info(f"🚫 Mercado Pago canceló la orden {order_id}.")
+    else:
+        mercadopago_log.info(
+            f"↪️ Mercado Pago no canceló la orden {order_id} ({error or 'sigue abierta'}): "
+            "el cliente puede estar pagando. Se consulta su estado..."
+        )
+        info, error = _mp_consultar_orden(order_id, access_token)
+    if info and info.get("status") in MP_ESTADOS_FINALES:
+        return _mp_resultado_final(info, order_id, ctx)
+
+    estado = (info or {}).get("status") or error or "desconocido"
+    mercadopago_log.info(
+        f"⚠️ SIN CONFIRMACIÓN — orden {order_id} — {ctx}: no se pudo cerrar (estado: {estado}). "
+        "El cliente PUEDE pagar todavía. El terminal queda bloqueado y se sigue consultando a "
+        "Mercado Pago hasta conocer el resultado (o resolver desde el panel)."
+    )
+    return {
+        "status": "indeterminada",
+        "order_id": order_id,
+        "response": info,
+        "message": "La orden sigue abierta en el terminal y no se pudo cancelar. Se reconcilia sola "
+                   "consultando a Mercado Pago; no reintentar el cobro.",
+    }
+
+
+def resolver_terminal_mp(solicitado):
+    """
+    Elige el terminal Point para un cobro. El terminal de Mercado Pago es
+    independiente de TERMINAL_ID (Getnet/Transbank): nunca se usa uno por el otro.
+    - Con MP_TERMINAL_ID configurado, el solicitado debe ser uno de ellos. Si hay
+      uno solo y el request trae otra cosa (ej. el TERMINAL_ID de Getnet), se usa
+      el configurado.
+    - Sin MP_TERMINAL_ID, se usa el que venga en el request.
+    Returns: (terminal_id, error) — error es un texto si no se pudo elegir.
+    """
+    solicitado = str(solicitado).strip() if solicitado else ""
+    if MP_TERMINALES:
+        if solicitado in MP_TERMINALES:
+            return solicitado, None
+        if len(MP_TERMINALES) == 1:
+            if solicitado:
+                logger.info("terminal_id MP '%s' no configurado; se usa MP_TERMINAL_ID=%s", solicitado, MP_TERMINALES[0])
+            return MP_TERMINALES[0], None
+        if not solicitado:
+            return None, f"Hay varios terminales Mercado Pago configurados: indique mp_terminal_id ({', '.join(MP_TERMINALES)})"
+        return None, f"El terminal '{solicitado}' no está configurado en MP_TERMINAL_ID ({', '.join(MP_TERMINALES)})"
+    if solicitado:
+        return solicitado, None
+    return None, "Falta el terminal de Mercado Pago: configure MP_TERMINAL_ID o envíe mp_terminal_id"
+
+
+def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVER, idempotency_key=None,
+                        external_reference=None, cancel=None, on_order_created=None):
     """
     Procesa un pago con Mercado Pago Point.
-    Retorna un dict con el resultado.
+    cancel: threading.Event para dejar de esperar a pedido del cliente.
+    on_order_created(order_id): se llama apenas MP confirma la orden (para persistirla).
+    Retorna un dict con el resultado; status "indeterminada" si no se sabe si se cobró.
     """
+    external_reference = external_reference or f"ext_ref_{uuid.uuid4().hex[:8]}"
+    ctx = f"tx {external_reference} — terminal {terminal_id} — monto {fmt_monto(amount)}"
     logger.info("Procesando MercadoPago terminal=%s monto=%s timeout=%s", terminal_id, amount, timeout)
-    mercadopago_log.info(f"🟢 Cobro iniciado — terminal {terminal_id} — monto {fmt_monto(amount)}")
+    mercadopago_log.info(f"🟢 Cobro iniciado — {ctx} — espera máxima {timeout} s")
 
     idempotency_key = idempotency_key or str(uuid.uuid4())
 
     payload = {
         "type": "point",
-        "external_reference": external_reference or f"ext_ref_{uuid.uuid4().hex[:8]}",
+        "external_reference": external_reference,
         "expiration_time": "PT16M",
         "transactions": {"payments": [{"amount": str(amount)}]},
         "config": {
@@ -118,70 +352,87 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
         "description": "Venta POS"
     }
 
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": idempotency_key
-    }
-
+    order_id = None
     try:
-        status_code, data_resp = _http_json("POST", MP_API_URL, headers=headers, payload=payload, timeout=15)
-
+        status_code, data_resp, ambiguo = _mp_crear_orden(payload, access_token, idempotency_key, ctx)
         logger.info("Respuesta inicial MercadoPago (%s): %s", status_code, json.dumps(data_resp, ensure_ascii=False))
 
-        if status_code != 201:
+        if not (status_code in (200, 201) and data_resp.get("id")):
+            error = _mp_describir_error(status_code, data_resp)
+            if ambiguo:
+                mercadopago_log.info(
+                    f"⚠️ SIN CONFIRMACIÓN — {ctx}: Mercado Pago no respondió al crear la orden "
+                    f"({error}). La orden PUDO haberse creado: revisar en el portal de Mercado Pago "
+                    "y resolver desde el panel. No reintentar el cobro."
+                )
+                return {"status": "indeterminada", "http_status": status_code, "response": data_resp,
+                        "message": "No se pudo confirmar si Mercado Pago creó la orden. Revisar el portal de "
+                                   "Mercado Pago y resolver desde el panel; no reintentar el cobro."}
             logger.warning("Error creando orden MP: %s %s", status_code, data_resp)
             mercadopago_log.info(
-                f"❌ No se pudo crear la orden de cobro (terminal {terminal_id}, monto {fmt_monto(amount)}): "
-                f"Mercado Pago respondió HTTP {status_code} — {data_resp}"
+                f"❌ No se pudo crear la orden de cobro ({ctx}): {error}. "
+                "No se envió nada al terminal, es seguro reintentar."
             )
+            if status_code is None:
+                return {"status": "error", "message": data_resp.get("message"), "response": data_resp}
             return {"status": "failed", "http_status": status_code, "response": data_resp}
 
         order_id = data_resp["id"]
+        if on_order_created:
+            on_order_created(order_id)
         logger.info("Orden MP creada: %s; esperando resultado...", order_id)
-        mercadopago_log.info(f"⏳ Orden creada (id {order_id}) — esperando que el cliente pague en el terminal {terminal_id}...")
+        mercadopago_log.info(f"⏳ Orden creada (id {order_id}) — {ctx} — esperando que el cliente pague en el terminal...")
 
         start = time.time()
         last_logged_status = None
+        error_consulta = None
+        motivo = f"Se agotó el tiempo de espera ({timeout} s)"
         while time.time() - start < timeout:
-            check_code, order_info = _http_json("GET", f"{MP_API_URL}/{order_id}", headers=headers, payload=None, timeout=10)
+            if cancel is not None and cancel.is_set():
+                motivo = "El cliente canceló la espera"
+                break
+
+            order_info, error = _mp_consultar_orden(order_id, access_token)
+            if order_info is None:
+                # Error transitorio: NO es un rechazo, el cliente puede estar pagando.
+                if error != error_consulta:
+                    mercadopago_log.info(
+                        f"↪️ Orden {order_id}: no se pudo consultar su estado ({error}). "
+                        "No es un rechazo: se sigue consultando..."
+                    )
+                    error_consulta = error
+                time.sleep(MP_INTERVALO_CONSULTA)
+                continue
+            if error_consulta:
+                mercadopago_log.info(f"🔌 Orden {order_id}: se recuperó la comunicación con Mercado Pago.")
+                error_consulta = None
+
             status = order_info.get("status")
-
-            logger.info("Estado actual orden MP %s: %s -> %s", order_id, check_code, json.dumps(order_info, ensure_ascii=False))
-
-            if status in ("created", "in_process", "at_terminal"):
+            logger.debug("Estado actual orden MP %s: %s", order_id, json.dumps(order_info, ensure_ascii=False))
+            if status not in MP_ESTADOS_FINALES:
                 if status != last_logged_status:
-                    mercadopago_log.info(f"↪️ Orden {order_id}: estado {status} (cliente aún no completa el pago)")
+                    logger.info("Orden MP %s en estado %s", order_id, status)
+                    mercadopago_log.info(
+                        f"↪️ Orden {order_id}: estado {status} — {MP_DESCRIPCION_ESTADOS.get(status, 'cliente aún no completa el pago')} "
+                        f"({int(time.time() - start)} s de {timeout} s)"
+                    )
                     last_logged_status = status
-                time.sleep(3)
+                time.sleep(MP_INTERVALO_CONSULTA)
                 continue
 
             logger.info("Orden %s finalizada con estado: %s", order_id, status)
-            logger.info("Respuesta final MercadoPago: %s", json.dumps(order_info, ensure_ascii=False))
-            aprobado = _mp_aprobado(order_info)
-            mercadopago_log.info(
-                f"{'✅' if aprobado else '⛔'} Cobro FINALIZADO — orden {order_id} — terminal {terminal_id} — "
-                f"monto {fmt_monto(amount)} — estado {status}"
-            )
-            # Se normaliza a "approved" (contrato documentado para el cliente web);
-            # el estado original de MP queda en mp_status y en response.
-            return {
-                "status": "approved" if aprobado else status,
-                "mp_status": status,
-                "order_id": order_id,
-                "response": order_info,
-            }
+            return _mp_resultado_final(order_info, order_id, ctx)
 
-        logger.warning("Timeout esperando respuesta MP orden %s", order_id)
-        mercadopago_log.info(
-            f"⚠️ Se agotó el tiempo de espera del cobro — orden {order_id} — terminal {terminal_id}. "
-            "Estado desconocido: revisar manualmente en el portal de Mercado Pago antes de reintentar."
-        )
-        return {"status": "timeout", "order_id": order_id}
+        logger.warning("%s — orden MP %s sin resultado", motivo, order_id)
+        return _mp_cerrar_orden_pendiente(order_id, access_token, ctx, motivo)
 
     except Exception as e:
         logger.error("Error MercadoPago: %s\n%s", e, traceback.format_exc())
-        mercadopago_log.info(f"❌ Error inesperado procesando el cobro (terminal {terminal_id}, monto {fmt_monto(amount)}): {e}")
+        if order_id:
+            # La orden ya estaba en el terminal: un error nuestro no dice si se cobró.
+            mercadopago_log.info(f"⚠️ Error inesperado con la orden {order_id} ya creada ({ctx}): {e}. Queda SIN CONFIRMACIÓN.")
+            return {"status": "indeterminada", "order_id": order_id, "message": str(e)}
+        mercadopago_log.info(f"❌ Error inesperado procesando el cobro ({ctx}): {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -197,6 +448,9 @@ class APIServer:
     def __init__(self, pos_module: POSModule, getnet_module=None):
         self.pos = pos_module
         self.getnet = getnet_module
+        if self.getnet and self.pos:
+            # La detección automática de Getnet nunca debe mandar su POLL al POS Transbank.
+            self.getnet.puertos_ajenos = lambda: [self.pos.get_current_port()] if USAR_POS_FISICO else []
         self.app = Flask(__name__)
         # Los requests legítimos son JSON de pocos cientos de bytes.
         self.app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
@@ -228,18 +482,18 @@ class APIServer:
         self.cleanup_thread = None
         self._stop_cleanup = threading.Event()
 
-        self.getnet_monitor_thread = None
+        self.recon_monitor_thread = None
         # tx_id Getnet cuya petición HTTP sigue abierta esperando que el POS vuelva
         # (las resuelve el worker, no el monitor en background).
         self._esperando_getnet = set()
         self._esperando_lock = threading.Lock()
-        self._stop_getnet_monitor = threading.Event()
+        self._stop_recon_monitor = threading.Event()
 
         self.setup_routes()
         self.register_local_agent()
         self.start_local_worker()
         self.start_cleanup_task()
-        self.start_getnet_reconciliation_monitor()
+        self.start_reconciliation_monitor()
 
         logger.info("APIServer inicializado")
 
@@ -341,7 +595,7 @@ class APIServer:
                                 if resuelto:
                                     result = {**resuelto, "ticket": ticket}
                     elif tipo == "mercadopago":
-                        terminal_id = task.get("terminal_id") or task.get("id_terminal") or MP_TERMINAL_ID or ID_TERMINAL
+                        terminal_id, _ = resolver_terminal_mp(task.get("mp_terminal_id") or task.get("terminal_id"))
                         access_token = None
                         if ALLOW_MP_TOKEN_IN_REQUEST:
                             access_token = task.get("access_token")
@@ -456,68 +710,68 @@ class APIServer:
             pass
         logger.info("Tarea de limpieza detenida")
 
-    # ---------- Monitor de reconciliación automática Getnet ----------
-    def start_getnet_reconciliation_monitor(self, interval=30):
+    # ---------- Monitor de reconciliación automática (Getnet y Mercado Pago) ----------
+    def start_reconciliation_monitor(self, interval=30):
         """
-        Reintenta periódicamente resolver transacciones Getnet que quedaron
-        INDETERMINADA (comando enviado al POS, sin confirmación) usando Command 101
-        (Último Comprobante). No depende de is_online() para decidir cuándo intentar
-        —esa señal queda cacheada y no siempre refleja si el cable realmente volvió—
-        así que simplemente reintenta cada `interval` segundos hasta que el POS
-        conteste algo útil; el intento en sí (conectar + leer) es la prueba real de
-        si ya hay comunicación de nuevo.
+        Reintenta periódicamente resolver transacciones que quedaron INDETERMINADA:
+        - Getnet: comando enviado al POS sin confirmación; se consulta el Command 101
+          (Último Comprobante). No depende de is_online() para decidir cuándo intentar
+          —esa señal queda cacheada y no siempre refleja si el cable realmente volvió—
+          así que simplemente reintenta cada `interval` segundos hasta que el POS
+          conteste algo útil; el intento en sí (conectar + leer) es la prueba real de
+          si ya hay comunicación de nuevo.
+        - Mercado Pago: orden que no se pudo cancelar al dejar de esperarla; se
+          consulta su estado en la API hasta que sea definitivo (a más tardar
+          expira sola en MP).
         """
-        if not self.getnet:
-            return
-
-        self._stop_getnet_monitor.clear()
+        self._stop_recon_monitor.clear()
 
         def monitor():
-            logger.info("Monitor de reconciliación Getnet iniciado (cada %ss)", interval)
-            while not self._stop_getnet_monitor.wait(interval):
+            logger.info("Monitor de reconciliación iniciado (cada %ss)", interval)
+            while not self._stop_recon_monitor.wait(interval):
                 try:
                     with self._esperando_lock:
                         esperando = set(self._esperando_getnet)
                     pendientes = [
                         tx for tx in tx_store.listar_no_resueltas()
-                        if tx.get("tipo") == "getnet" and tx.get("estado") == "INDETERMINADA"
-                        and tx["tx_id"] not in esperando
+                        if tx.get("estado") == "INDETERMINADA" and tx["tx_id"] not in esperando
                     ]
                     for tx in pendientes:
-                        tx_id = tx["tx_id"]
-                        ticket = tx.get("ticket")
-                        getnet_log.info(
-                            f"🔁 Monitor automático: reintentando reconciliar el ticket {ticket} (tx {tx_id})..."
+                        if tx.get("tipo") == "getnet" and not self.getnet:
+                            continue
+                        if tx.get("tipo") not in ("getnet", "mercadopago"):
+                            continue
+                        _tipo_log = getnet_log if tx.get("tipo") == "getnet" else mercadopago_log
+                        _tipo_log.info(
+                            f"🔁 Monitor automático: reintentando reconciliar el ticket {tx.get('ticket')} "
+                            f"(tx {tx['tx_id']})..."
                         )
-                        recon = self.reconciliar_getnet(tx)
-                        estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
-                        nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
-
+                        recon = self.reconciliar(tx)
+                        nuevo_estado = self.aplicar_reconciliacion(
+                            tx, recon,
+                            resuelto_por="monitor automático (Command 101)" if tx.get("tipo") == "getnet"
+                            else "monitor automático (API Mercado Pago)",
+                        )
                         if nuevo_estado == "INDETERMINADA":
                             continue  # sigue sin poder confirmarse, se reintenta en el próximo ciclo
-
-                        tx_store.actualizar_estado(
-                            tx_id, nuevo_estado, raw_response=recon, nota=recon.get("message"),
-                            resuelto_por="monitor automático (Command 101)",
+                        logger.info("Monitor: tx=%s reconciliada automáticamente -> %s", tx["tx_id"], nuevo_estado)
+                        _tipo_log.info(
+                            f"✅ Monitor automático: ticket {tx.get('ticket')} (tx {tx['tx_id']}) reconciliado como {nuevo_estado}."
                         )
-                        with self.busy_lock:
-                            self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
-                        logger.info("Monitor Getnet: tx=%s reconciliada automáticamente -> %s", tx_id, nuevo_estado)
-                        getnet_log.info(f"✅ Monitor automático: ticket {ticket} (tx {tx_id}) reconciliado como {nuevo_estado}.")
                 except Exception as e:
-                    logger.error("Error en monitor de reconciliación Getnet: %s", e)
+                    logger.error("Error en monitor de reconciliación: %s", e)
 
-        self.getnet_monitor_thread = threading.Thread(target=monitor, daemon=True, name="GetnetReconMonitor")
-        self.getnet_monitor_thread.start()
+        self.recon_monitor_thread = threading.Thread(target=monitor, daemon=True, name="ReconMonitor")
+        self.recon_monitor_thread.start()
 
-    def stop_getnet_reconciliation_monitor(self):
-        self._stop_getnet_monitor.set()
+    def stop_reconciliation_monitor(self):
+        self._stop_recon_monitor.set()
         try:
-            if self.getnet_monitor_thread:
-                self.getnet_monitor_thread.join(timeout=1)
+            if self.recon_monitor_thread:
+                self.recon_monitor_thread.join(timeout=1)
         except Exception:
             pass
-        logger.info("Monitor de reconciliación Getnet detenido")
+        logger.info("Monitor de reconciliación detenido")
 
     # ---------- HTTP routes ----------
     def setup_routes(self):
@@ -734,26 +988,22 @@ class APIServer:
 
         @app.route("/panel/pendientes/<tx_id>/reconciliar", methods=["POST"])
         def panel_pendientes_reconciliar(tx_id):
-            """Reconsulta al POS (Command 101) por el ticket de esta transacción."""
+            """Reconsulta el resultado real: al POS Getnet (Command 101) o a la API de Mercado Pago."""
             tx = tx_store.obtener(tx_id)
             if not tx:
                 return jsonify({"ok": False, "error": "Transacción no encontrada"}), 404
-            if tx.get("tipo") != "getnet" or not self.getnet:
-                return jsonify({"ok": False, "error": "Reconciliación automática solo disponible para Getnet"}), 400
+            if not ((tx.get("tipo") == "getnet" and self.getnet) or tx.get("tipo") == "mercadopago"):
+                return jsonify({"ok": False, "error": "Reconciliación automática solo disponible para Getnet y Mercado Pago"}), 400
 
-            getnet_log.info(f"👤 Un operador pidió desde el panel reconsultar el ticket {tx.get('ticket')} (tx {tx_id}).")
-            recon = self.reconciliar_getnet(tx)
-            estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
-            nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
-            tx_store.actualizar_estado(
-                tx_id, nuevo_estado, raw_response=recon, nota=recon.get("message"),
-                resuelto_por="sistema (Command 101, gatillado desde panel)" if nuevo_estado != "INDETERMINADA" else None,
+            _tipo_log = getnet_log if tx.get("tipo") == "getnet" else mercadopago_log
+            _tipo_log.info(f"👤 Un operador pidió desde el panel reconsultar el ticket {tx.get('ticket')} (tx {tx_id}).")
+            recon = self.reconciliar(tx)
+            nuevo_estado = self.aplicar_reconciliacion(
+                tx, recon,
+                resuelto_por="sistema (Command 101, gatillado desde panel)" if tx.get("tipo") == "getnet"
+                else "sistema (API Mercado Pago, gatillado desde panel)",
+                guardar_no_resuelto=True,
             )
-
-            if nuevo_estado != "INDETERMINADA":
-                with self.busy_lock:
-                    self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
-
             logger.info("Reconciliación manual (panel) tx=%s -> %s", tx_id, nuevo_estado)
             return jsonify({"ok": True, "estado": nuevo_estado, "detalle": recon})
 
@@ -1115,9 +1365,6 @@ class APIServer:
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "Es necesario el id_sucursal, nombre_caja y el tipo(type) de pos"}), 400
 
-            # is_local: la petición viene de la caja configurada en .env
-            is_local = (nombre_caja == str(NOMBRE_CAJA))
-
             custom_timeout = data.get("timeout")
             if custom_timeout:
                 try:
@@ -1467,7 +1714,8 @@ class APIServer:
 
             # MERCADO PAGO FLOW
             elif pos_type == "mercadopago":
-                terminal_id = data.get("terminal_id") or MP_TERMINAL_ID or ID_TERMINAL
+                # mp_terminal_id: campo propio para no mezclarlo con el terminal_id de Getnet/Transbank.
+                terminal_id, terminal_error = resolver_terminal_mp(data.get("mp_terminal_id") or data.get("terminal_id"))
                 access_token = None
                 if ALLOW_MP_TOKEN_IN_REQUEST:
                     access_token = data.get("access_token")
@@ -1481,20 +1729,99 @@ class APIServer:
                 amount = _monto_valido(amount)
                 if amount is None:
                     return jsonify({"error": "El monto debe ser un entero positivo"}), 400
-                if terminal_id is None or terminal_id == "":
-                    return jsonify({"error": "Es necesario el terminal_id de mercado pago"}), 400
+                if terminal_error:
+                    mercadopago_log.info(f"❌ Venta rechazada por el sistema (monto {fmt_monto(amount)}): {terminal_error}")
+                    return jsonify({"error": terminal_error, "terminales_configurados": MP_TERMINALES}), 400
 
+                # El tx_id viaja a MP como external_reference y como base de la
+                # X-Idempotency-Key: se valida igual que en Getnet.
                 tx_id_input = data.get("tx_id") or data.get("external_reference")
-                tx_id = str(tx_id_input).strip() if tx_id_input else str(uuid.uuid4())
-                idempotency_key = f"mp_{tx_id}"
-                res = process_mercadopago(
-                    terminal_id,
-                    access_token,
-                    amount,
-                    timeout=timeout,
-                    idempotency_key=idempotency_key,
-                    external_reference=tx_id,
-                )
+                if tx_id_input is not None:
+                    tx_id_input = str(tx_id_input).strip()
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tx_id_input):
+                        return jsonify({"error": "tx_id inválido (solo letras, números, '-' y '_', máx. 64)"}), 400
+                    if tx_store.obtener(tx_id_input):
+                        return jsonify({"error": "tx_id ya fue usado en otra venta", "transaction_id": tx_id_input}), 409
+                tx_id = tx_id_input or str(uuid.uuid4())
+
+                # El recurso físico es el terminal: una orden sin confirmar en él
+                # bloquea nuevas ventas en ESE terminal (no en las cajas Getnet/Transbank).
+                runner_id_sucursal = str(ID_SUCURSAL)
+                caja_mp = f"mp:{terminal_id}"
+                pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, caja_mp)
+                if pendiente:
+                    logger.warning("Venta MP bloqueada: transacción previa sin resolver tx=%s", pendiente)
+                    mercadopago_log.info(
+                        f"🔒 Venta rechazada por el sistema: el terminal {terminal_id} tiene una orden anterior "
+                        f"({pendiente}) sin confirmar. No se creó ninguna orden nueva."
+                    )
+                    return jsonify({
+                        "status": "unresolved_previous_transaction",
+                        "message": "Hay una venta Mercado Pago previa en este terminal sin confirmar. "
+                                   "Se reconcilia sola o puede resolverse desde el panel.",
+                        "pending_transaction_id": pendiente,
+                    }), 409
+
+                key = (runner_id_sucursal, caja_mp)
+                with self.busy_lock:
+                    if key in self.busy_boxes:
+                        mercadopago_log.info(
+                            f"🔁 Venta rechazada: el terminal {terminal_id} ya tiene otro cobro en curso "
+                            f"(monto {fmt_monto(amount)} intentado, caja {nombre_caja})."
+                        )
+                        return jsonify({"status": "busy", "message": "Terminal Mercado Pago ocupado"}), 429
+                    self.busy_boxes.add(key)
+
+                cancel = threading.Event()
+                res, estado = {"status": "error", "message": "Error interno"}, "ERROR"
+                try:
+                    tx_store.registrar_intento(
+                        tx_id=tx_id,
+                        tipo="mercadopago",
+                        ticket=None,  # se completa con el id de la orden apenas MP la crea
+                        terminal_id=terminal_id,
+                        id_sucursal=runner_id_sucursal,
+                        nombre_caja=caja_mp,
+                        monto=amount,
+                        client_id_sucursal=id_sucursal,
+                        client_nombre_caja=nombre_caja,
+                    )
+                    with self.tasks_lock:
+                        self.tasks[tx_id] = {
+                            "event": threading.Event(),
+                            "cancel": cancel,
+                            "type": "mercadopago",
+                            "result": None,
+                            "estado": "PENDIENTE",
+                            "id_sucursal": runner_id_sucursal,
+                            "nombre_caja": caja_mp,
+                            "timestamp": time.time(),
+                            "timeout": timeout,
+                        }
+
+                    res = process_mercadopago(
+                        terminal_id,
+                        access_token,
+                        amount,
+                        timeout=timeout,
+                        idempotency_key=f"mp_{tx_id}",
+                        external_reference=tx_id,
+                        cancel=cancel,
+                        on_order_created=lambda order_id: tx_store.asignar_ticket(tx_id, order_id),
+                    )
+                    estado = _estado_db(res)
+                    tx = tx_store.obtener(tx_id)
+                    if tx and tx.get("estado") in tx_store.ESTADOS_SIN_RESOLVER:
+                        tx_store.actualizar_estado(tx_id, estado, raw_response=res)
+                    elif tx:
+                        estado = tx.get("estado")  # resuelta por otra vía mientras tanto
+                finally:
+                    with self.tasks_lock:
+                        entry = self.tasks.pop(tx_id, None)
+                    if entry:
+                        entry["event"].set()
+                    with self.busy_lock:
+                        self.busy_boxes.discard(key)
 
                 status = res.get("status")
                 response_obj = res.get("response") or {}
@@ -1510,11 +1837,25 @@ class APIServer:
                 }
                 success = status in ("approved", "success")
 
-                return jsonify({
+                respuesta = {
                     "success": success,
+                    "transaction_id": tx_id,
+                    "estado": estado,
                     "data": data_out,
                     **res,
-                }), 200
+                }
+                if estado == "INDETERMINADA":
+                    respuesta["message"] = (
+                        f"{res.get('message', 'Venta sin confirmar.')} "
+                        f"Consulte /pago/estado/{tx_id} hasta obtener APROBADO o RECHAZADO."
+                    )
+                # Igual que en Getnet: el mismo JSON que recibe el cliente queda en el
+                # log, para poder procesarlo aunque el cliente no haya guardado la respuesta.
+                mercadopago_log.info(
+                    f"📄 Respuesta /pago tx={tx_id} (estado={estado}): "
+                    f"{json.dumps(respuesta, ensure_ascii=False, default=str)}"
+                )
+                return jsonify(respuesta), 200
 
             else:
                 return jsonify({"error": "Tipo POS no soportado"}), 400
@@ -1591,6 +1932,7 @@ class APIServer:
                     return jsonify({
                         "success": True,
                         "online": token_ok,
+                        "terminales": MP_TERMINALES,
                         "message": "Mercado Pago configurado" if token_ok else "Falta MP_ACCESS_TOKEN en configuración",
                     }), 200 if token_ok else 503
                 else:
@@ -1802,8 +2144,33 @@ class APIServer:
                     return jsonify({"error": "Transacción no encontrada"}), 404
                 if task.get("result") is not None:
                     return jsonify({"error": "La transacción ya finalizó", "estado": task.get("estado")}), 400
+                tipo = task.get("type")
 
-                if task.get("type") == "getnet":
+            if tipo == "mercadopago":
+                # La orden sigue abierta en el terminal: /pago la cancela en MP y
+                # responde el resultado real (CANCELADO -> RECHAZADO, o INDETERMINADA
+                # si el cliente ya estaba pagando).
+                task["cancel"].set()
+                mercadopago_log.info(f"✋ El cliente pidió cancelar la venta (tx {tx_id}, {task.get('nombre_caja')}).")
+                return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "CANCELANDO",
+                                "message": "Se pidió cancelar la orden en Mercado Pago. El resultado final llega "
+                                           f"en la respuesta de /pago o en /pago/estado/{tx_id}."}), 202
+
+            if tipo == "getnet" and self.getnet and self.getnet.solicitar_cancelacion():
+                # La venta está esperando en el POS: se le pide cancelarla (Command 116)
+                # y se espera a que el worker informe el resultado.
+                if task["event"].wait(timeout=ESPERA_CANCELACION_GETNET):
+                    estado = task.get("estado")
+                    logger.info("Venta Getnet %s terminó tras pedir cancelación: %s", tx_id, estado)
+                    return jsonify({"status": "ok", "transaction_id": tx_id, "estado": estado,
+                                    "result": task.get("result")}), 200
+
+            with self.tasks_lock:
+                if task.get("result") is not None:
+                    return jsonify({"status": "ok", "transaction_id": tx_id, "estado": task.get("estado"),
+                                    "result": task.get("result")}), 200
+
+                if tipo == "getnet":
                     # La venta ya pudo llegar al POS: cancelar solo corta la espera de
                     # la petición. La transacción sigue INDETERMINADA (caja bloqueada) y
                     # el monitor la sigue reconciliando en background.
@@ -1859,6 +2226,67 @@ class APIServer:
             sent_at=tx.get("created_at"),
             known_operation_ids=tx_store.operation_ids_conocidos("getnet", excluir_tx_id=tx.get("tx_id")),
         )
+
+    def reconciliar_mercadopago(self, tx):
+        """Consulta a la API de Mercado Pago el estado de la orden de una transacción del tx_store."""
+        order_id = tx.get("ticket")
+        tx_id = tx.get("tx_id")
+        if not order_id:
+            mercadopago_log.info(
+                f"↪️ No se puede reconciliar la tx {tx_id}: no se conoce el id de la orden (Mercado Pago no confirmó "
+                "su creación). Revisar en el portal de Mercado Pago y resolver desde el panel."
+            )
+            return {"status": "no_resuelto",
+                    "message": "No se conoce el id de la orden (MP no confirmó su creación). "
+                               "Revisar en el portal de Mercado Pago y resolver a mano."}
+        if not MP_ACCESS_TOKEN:
+            return {"status": "no_resuelto", "message": "Falta MP_ACCESS_TOKEN para consultar la orden"}
+
+        mercadopago_log.info(f"🔍 Reconciliando la orden {order_id} (tx {tx_id}): consultando su estado a Mercado Pago...")
+        info, error = _mp_consultar_orden(order_id, MP_ACCESS_TOKEN)
+        if info is None:
+            mercadopago_log.info(f"↪️ No se pudo consultar la orden {order_id} ({error}). Sigue INDETERMINADA.")
+            return {"status": "no_resuelto", "message": f"No se pudo consultar la orden {order_id} en Mercado Pago ({error})"}
+        status = info.get("status")
+        if status not in MP_ESTADOS_FINALES:
+            mercadopago_log.info(
+                f"↪️ La orden {order_id} sigue en estado {status}: el cliente todavía puede pagar. "
+                "Se vuelve a consultar más tarde."
+            )
+            return {"status": "no_resuelto", "response": info,
+                    "message": f"La orden {order_id} sigue en estado {status}: el cliente todavía puede pagar"}
+        aprobado = _mp_aprobado(info)
+        detalle = _mp_detalle_pago(info)
+        mercadopago_log.info(
+            f"{'✅' if aprobado else '↪️'} Reconciliación: Mercado Pago informa la orden {order_id} (tx {tx_id}, "
+            f"monto {fmt_monto(tx.get('monto'))}) como {'APROBADA' if aprobado else 'NO cobrada'} — estado {status}"
+            + (f" — {detalle}" if detalle else "")
+        )
+        return {"status": "aprobado" if aprobado else "rechazado", "response": info,
+                "message": f"Mercado Pago informa la orden {order_id} en estado {status}"
+                           f"{' (' + info['status_detail'] + ')' if info.get('status_detail') else ''}"}
+
+    def reconciliar(self, tx):
+        """Resultado real de una transacción sin confirmar, según su medio de pago."""
+        if tx.get("tipo") == "mercadopago":
+            return self.reconciliar_mercadopago(tx)
+        return self.reconciliar_getnet(tx)
+
+    def aplicar_reconciliacion(self, tx, recon, resuelto_por, guardar_no_resuelto=False):
+        """Persiste el resultado de una reconciliación y, si es definitivo, libera la caja.
+        guardar_no_resuelto: registrar también el intento fallido (para mostrarlo en el panel)."""
+        estado_map = {"aprobado": "APROBADO", "rechazado": "RECHAZADO", "no_resuelto": "INDETERMINADA"}
+        nuevo_estado = estado_map.get(recon.get("status"), "INDETERMINADA")
+        if nuevo_estado == "INDETERMINADA" and not guardar_no_resuelto:
+            return nuevo_estado
+        tx_store.actualizar_estado(
+            tx["tx_id"], nuevo_estado, raw_response=recon, nota=recon.get("message"),
+            resuelto_por=resuelto_por if nuevo_estado != "INDETERMINADA" else None,
+        )
+        if nuevo_estado != "INDETERMINADA":
+            with self.busy_lock:
+                self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+        return nuevo_estado
 
     def esperar_resolucion_getnet(self, tx_id, cancel, intervalo=5, espera_tras_intento=15, reescaneo=30,
                                   max_espera=None):
@@ -1986,7 +2414,7 @@ class APIServer:
             self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
 
         logger.info("Resolución tx=%s -> %s por %s", tx_id, estado, resuelto_por)
-        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log}.get(tx.get("tipo"))
+        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log, "mercadopago": mercadopago_log}.get(tx.get("tipo"))
         if _tipo_log:
             _tipo_log.info(
                 f"👤 {resuelto_por or 'Un operador'} resolvió MANUALMENTE (mirando el comprobante del POS) el "

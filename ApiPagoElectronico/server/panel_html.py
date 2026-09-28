@@ -247,19 +247,6 @@ PANEL_HTML = """<!DOCTYPE html>
       'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
       'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
       'TERMINAL_ID': 'ID del terminal que se reporta a Transbank/Getnet. Si se deja vacío, se arma automático a partir de NOMBRE_CAJA.',
-      'USAR_POS_FISICO': '⚠️ Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
-      'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
-      'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
-      'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
-      'MAX_TRANSACTION_TIME': 'Segundos máximos que Transbank espera una respuesta antes de darla por vencida.',
-      'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP para operaciones de POS.',
-    } %}
-
-    {% set hints = {
-      'HTTP_PORT': 'Puerto donde corre esta API. Se define en el .env, no se puede cambiar desde acá.',
-      'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
-      'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
-      'TERMINAL_ID': 'ID del terminal que se reporta a Transbank/Getnet. Si se deja vacío, se arma automático a partir de NOMBRE_CAJA.',
       'USAR_POS_FISICO': 'Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
       'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
       'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
@@ -268,7 +255,7 @@ PANEL_HTML = """<!DOCTYPE html>
       'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
       'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
       'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"). Ej: https://mitienda.cl,https://otra.cl',
-      'MP_TERMINAL_ID': 'Terminal ID específico para Mercado Pago. Si se deja vacío, se usa el TERMINAL_ID general de arriba. Tiene prioridad sobre él solo para transacciones de Mercado Pago.',
+      'MP_TERMINAL_ID': 'Terminal(es) Point de Mercado Pago de esta caja (ej. NEWLAND_N950__ABC123). Es independiente del TERMINAL_ID de Getnet/Transbank. Si hay más de uno, separarlos por coma; el sistema web elige cuál con mp_terminal_id en cada /pago.',
       'ALLOW_MP_TOKEN_IN_REQUEST': '⚠️ Si está en true, cualquiera que llame a /pago puede mandar su propio access_token de Mercado Pago en el request, en vez de usar el MP_ACCESS_TOKEN configurado acá. Útil solo si varias cajas/clientes usan cuentas de MP distintas. Dejar en false si no lo necesitás.',
     } %}
 
@@ -402,7 +389,11 @@ PANEL_HTML = """<!DOCTYPE html>
       <span class="param-key">ALLOW_MP_TOKEN_IN_REQUEST</span>
       <input class="param-val" name="ALLOW_MP_TOKEN_IN_REQUEST" value="{{ env_vars.get('ALLOW_MP_TOKEN_IN_REQUEST', 'false') }}" title="{{ hints['ALLOW_MP_TOKEN_IN_REQUEST'] }}" autocomplete="off">
     </div>
-    {{ terminal_id_field(placeholder='ej: NEWLAND_N950') }}
+    <div class="param-row">
+      <span class="param-key">MP_TERMINAL_ID</span>
+      <input class="param-val" name="MP_TERMINAL_ID" value="{{ env_vars.get('MP_TERMINAL_ID', '') }}" title="{{ hints['MP_TERMINAL_ID'] }}" autocomplete="off"
+             placeholder="ej: NEWLAND_N950__ABC123 (varios: separar por coma)">
+    </div>
 
     {% if env_vars %}
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">

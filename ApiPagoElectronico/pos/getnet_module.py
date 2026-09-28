@@ -18,6 +18,12 @@ logger = logging.getLogger(APP_NAME)
 
 # Códigos del manual (anexo "Códigos de respuestas").
 CODIGO_CANCELADO_POR_POS = 1006
+# Command 116 (Cancelar Venta): la caja pide cancelar la venta en curso. El POS
+# la acepta solo si el cliente todavía no ingresó el PIN ni se envió al autorizador.
+COMANDO_CANCELAR_VENTA = 116
+# Tras confirmar la cancelación se espera un poco más la respuesta de la venta
+# (100), por si el POS igual la entrega (1006 o, si ya estaba autorizada, 0).
+ESPERA_TRAS_CANCELAR_SEGUNDOS = 10
 # 1003/1004/1005 = error de impresión (tapa abierta, sin papel, atasco). El
 # manual no aclara si el cobro alcanzó a autorizarse antes de imprimir, así
 # que no se trata como rechazo definitivo: queda INDETERMINADA y se verifica.
@@ -137,13 +143,26 @@ class GetnetModule:
         # Último puerto donde respondió el POS. Se conserva aunque el cable se
         # corte, para reconocer cuándo vuelve a aparecer.
         self._ultimo_puerto = GETNET_PORT
+        # Puertos de otras integraciones (Transbank) que nunca se deben sondear
+        # con el POLL de Getnet. Lo configura APIServer.
+        self.puertos_ajenos = lambda: []
+        # Cancelación (Command 116) pedida por la caja mientras se espera la venta.
+        # La envía el hilo de la venta, que es el dueño del puerto.
+        self._cancelar_venta = threading.Event()
+        self._venta_en_curso = False
+        # Respuesta del 116 si el POS aceptó cancelar la venta en curso.
+        self._cancelacion_confirmada = None
     
     def _find_getnet_port(self, exclude=None):
         """Detectar automáticamente el puerto del POS Getnet
 
         exclude: puertos que no se deben sondear (ej. el que ya usa Transbank).
         """
-        excluded = {p for p in (exclude or []) if p}
+        try:
+            ajenos = list(self.puertos_ajenos() or [])
+        except Exception:
+            ajenos = []
+        excluded = {p for p in [*(exclude or []), *ajenos] if p}
         logger.info("[GETNET] Buscando puerto automáticamente...")
         
         if self._port_cache and self._port_cache not in excluded:
@@ -424,7 +443,7 @@ class GetnetModule:
             logger.error(f"[GETNET] Error enviando (envío {'incierto' if writing else 'no realizado'}): {e}")
             return False
     
-    def _read_response(self, timeout=60, expected_function_code=None):
+    def _read_response(self, timeout=60, expected_function_code=None, cancelable=False):
         """Leer respuesta del POS.
 
         Si `expected_function_code` viene informado, se ignora cualquier
@@ -435,15 +454,29 @@ class GetnetModule:
         puerto llegaba una respuesta con FunctionCode 0 que no correspondía
         en absoluto al comando enviado, y sin este chequeo se tomaba como si
         fuera el resultado real de la venta.
+
+        cancelable: durante una venta, si la caja pidió cancelarla
+        (solicitar_cancelacion) se envía el Command 116 por este mismo puerto y
+        se procesa su respuesta; si el POS la acepta queda en
+        self._cancelacion_confirmada.
         """
         if not self.serial_connection or not self.serial_connection.is_open:
             return None
 
-        start = time.time()
+        deadline = time.time() + timeout
         buffer = ""
+        cancel_enviado = False
 
-        while time.time() - start < timeout:
+        while time.time() < deadline:
             try:
+                if cancelable and not cancel_enviado and self._cancelar_venta.is_set():
+                    cancel_enviado = True
+                    logger.info("[GETNET] Enviando Command 116 (Cancelar Venta)")
+                    getnet_log.info("✋ La caja pidió cancelar la venta en curso: se envía Cancelar Venta (Command 116) al POS...")
+                    if not self._send_command({"Command": COMANDO_CANCELAR_VENTA,
+                                               "DateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}):
+                        getnet_log.info("↪️ No se pudo enviar Cancelar Venta al POS; se sigue esperando el resultado de la venta.")
+
                 if self.serial_connection.in_waiting:
                     data = self.serial_connection.read(self.serial_connection.in_waiting).decode('utf-8', errors='ignore')
                     buffer += data
@@ -460,6 +493,18 @@ class GetnetModule:
                     buffer = buffer[match.end():] if match else ""
 
                     response_function_code = _rget(response, "FunctionCode")
+                    if cancel_enviado and response_function_code == COMANDO_CANCELAR_VENTA:
+                        if _rget(response, "ResponseCode") == 0:
+                            self._cancelacion_confirmada = response
+                            deadline = time.time() + ESPERA_TRAS_CANCELAR_SEGUNDOS
+                            getnet_log.info("🚫 El POS aceptó cancelar la venta (Command 116).")
+                        else:
+                            getnet_log.info(
+                                f"↪️ El POS NO aceptó cancelar la venta ({_rget(response, 'ResponseMessage')}, código "
+                                f"{_rget(response, 'ResponseCode')}): el cliente probablemente ya ingresó el PIN. "
+                                "Se sigue esperando el resultado."
+                            )
+                        continue
                     if expected_function_code is not None and response_function_code != expected_function_code:
                         logger.warning(
                             f"[GETNET] Respuesta con FunctionCode inesperado ({response_function_code}, "
@@ -514,6 +559,8 @@ class GetnetModule:
             }
 
         command_sent = False  # True en cuanto el POS PUDO haber recibido la venta
+        self._cancelar_venta.clear()
+        self._cancelacion_confirmada = None
         try:
             command = {
                 "Command": 100,
@@ -542,9 +589,17 @@ class GetnetModule:
                 return {"status": "error", "message": "Error enviando comando", "ticket": ticket}
 
             command_sent = True
+            self._venta_en_curso = True
             logger.info("[GETNET] Esperando usuario en POS...")
             getnet_log.info(f"⏳ Venta enviada al POS (ticket {ticket}), esperando que el cliente pague...")
-            response = self._read_response(timeout=timeout, expected_function_code=100)
+            response = self._read_response(timeout=timeout, expected_function_code=100, cancelable=True)
+
+            if not response and self._cancelacion_confirmada is not None:
+                # El POS confirmó (116 con código 0) que canceló la venta antes de
+                # enviarla al autorizador: no hubo cobro.
+                getnet_log.info(f"🚫 Venta CANCELADA desde la caja (Command 116) — ticket {ticket} — monto {fmt_monto(amount)}")
+                return {"status": "failed", "response": self._cancelacion_confirmada, "ticket": ticket,
+                        "cancelada_desde_caja": True}
 
             if not response:
                 # El comando SÍ se envió al POS, pero nunca llegó la
@@ -601,7 +656,19 @@ class GetnetModule:
             return {"status": "error", "message": str(e), "ticket": ticket}
 
         finally:
+            self._venta_en_curso = False
             self.disconnect()
+
+    def solicitar_cancelacion(self):
+        """
+        Pide cancelar (Command 116) la venta que está esperando respuesta del POS.
+        No escribe en el puerto: lo hace el hilo de la venta, que lo tiene tomado.
+        Devuelve False si no hay ninguna venta esperando respuesta.
+        """
+        if not self._venta_en_curso:
+            return False
+        self._cancelar_venta.set()
+        return True
 
     def _resultado_indeterminado(self, ticket, amount, motivo):
         logger.error(
@@ -824,6 +891,15 @@ class GetnetModule:
     
     def is_online(self):
         """Verificar si está online"""
-        if not self.port:
-            self.port = self._find_getnet_port()
-        return self.port is not None
+        if self.port:
+            return True
+        # El sondeo de puertos escribe en ellos: nunca en paralelo con una venta o
+        # una reconciliación que ya tiene tomado el puerto.
+        if not self._serial_lock.acquire(blocking=False):
+            return bool(self.puerto_presente())
+        try:
+            if not self.port:
+                self.port = self._find_getnet_port()
+            return self.port is not None
+        finally:
+            self._serial_lock.release()

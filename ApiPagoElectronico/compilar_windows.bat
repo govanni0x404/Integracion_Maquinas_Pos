@@ -166,7 +166,6 @@ echo.
     --exclude-module IPython ^
     --exclude-module PyQt5 ^
     --exclude-module PyQt6 ^
-    --exclude-module rumps ^
     --collect-submodules server ^
     --collect-submodules core ^
     --collect-submodules pos ^
@@ -181,10 +180,6 @@ echo.
     --hidden-import werkzeug ^
     --hidden-import werkzeug.serving ^
     --collect-all flask_cors ^
-    --collect-all requests ^
-    --collect-all idna ^
-    --collect-all certifi ^
-    --collect-all charset_normalizer ^
     --hidden-import psutil ^
     --hidden-import psutil._psutil_common ^
     --hidden-import psutil._psutil_windows ^
