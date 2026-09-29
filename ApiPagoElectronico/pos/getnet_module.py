@@ -115,6 +115,48 @@ def _rget(response, key, default=None):
     return default
 
 
+# Campos de la respuesta de una venta (manual, "Response 1: Sale"), en el orden
+# del manual. Toda respuesta que se entrega al cliente trae todos, aunque el POS
+# no los haya mandado (null), para que una venta confirmada por conciliación
+# tenga la misma forma que una normal.
+CAMPOS_VENTA = (
+    "FunctionCode", "ResponseCode", "ResponseMessage", "CommerceCode", "TerminalId", "Ticket",
+    "AuthorizationCode", "Amount", "SharesNumber", "SharesAmount", "Last4Digits", "OperationId",
+    "CardType", "AccountingDate", "AccountNumber", "CardBrand", "RealDate", "EmployeeId", "Tip",
+    "SaleType", "PosMode", "Cashback",
+)
+
+
+def normalizar_comprobante(response, ticket, origen):
+    """
+    Deja la respuesta de una venta con la misma forma venga de donde venga:
+    - origen "venta": respuesta directa del Command 100.
+    - origen "conciliacion": se confirmó después (Command 101 o respuesta que el
+      POS entregó al reconectar). En el A920 el 101 no trae Ticket y manda
+      OperationId 0, y varios campos opcionales no vienen.
+    Reglas: nombres en PascalCase del manual, campos faltantes en null, Ticket =
+    el de nuestra venta si el POS no lo manda, Last4Digits siempre texto de 4
+    dígitos, y OperationId 0 -> null (0 no es un número de comprobante real y no
+    sirve para anular). FunctionCode se deja tal cual (100 o 101) para saber qué
+    comando lo informó. Los campos extra que mande el POS se conservan.
+    """
+    if not isinstance(response, dict):
+        return response
+    out = {campo: _rget(response, campo) for campo in CAMPOS_VENTA}
+    conocidos = {c.lower() for c in CAMPOS_VENTA}
+    for k, v in response.items():
+        if k.strip().lower() not in conocidos:
+            out[k] = v
+    if out["Ticket"] in (None, "") and ticket:
+        out["Ticket"] = str(ticket)
+    if out["Last4Digits"] not in (None, ""):
+        out["Last4Digits"] = str(out["Last4Digits"]).zfill(4)
+    if out["OperationId"] in (0, "0", ""):
+        out["OperationId"] = None
+    out["Origen"] = origen
+    return out
+
+
 class GetnetModule:
     """
     Módulo para manejar POS Getnet con detección automática de puerto
@@ -619,13 +661,13 @@ class GetnetModule:
                     f"✅ Venta APROBADA — ticket {ticket} — monto {fmt_monto(amount)} — "
                     f"autorización {_rget(response, 'AuthorizationCode')} — tarjeta terminada en {_rget(response, 'Last4Digits')}"
                 )
-                return {"status": "success", "response": response, "ticket": ticket}
+                return {"status": "success", "response": normalizar_comprobante(response, ticket, "venta"), "ticket": ticket}
 
             # Cancelada (1006 = "Cancelado por POS": el cliente canceló o la máquina anuló la venta)
             elif response_code == CODIGO_CANCELADO_POR_POS:
                 logger.warning("[GETNET] Venta CANCELADA por el POS (código 1006)")
                 getnet_log.info(f"🚫 Venta CANCELADA en el POS (código 1006) — ticket {ticket} — monto {fmt_monto(amount)}")
-                return {"status": "failed", "response": response, "ticket": ticket}
+                return {"status": "failed", "response": normalizar_comprobante(response, ticket, "venta"), "ticket": ticket}
 
             # Error de impresión: no se sabe si el cobro alcanzó a autorizarse
             elif response_code in CODIGOS_ERROR_IMPRESION:
@@ -634,7 +676,7 @@ class GetnetModule:
                     f"el POS informó un error de impresión ({_rget(response, 'ResponseMessage')}, código {response_code}) "
                     "y no se sabe si el cobro alcanzó a autorizarse"
                 )
-                result["response"] = response
+                result["response"] = normalizar_comprobante(response, ticket, "venta")
                 return result
 
             # Rechazada
@@ -644,7 +686,7 @@ class GetnetModule:
                     f"⛔ Venta RECHAZADA — ticket {ticket} — monto {fmt_monto(amount)} — "
                     f"motivo: {_rget(response, 'ResponseMessage')} (código {response_code})"
                 )
-                return {"status": "failed", "response": response, "ticket": ticket}
+                return {"status": "failed", "response": normalizar_comprobante(response, ticket, "venta"), "ticket": ticket}
 
         except Exception as e:
             logger.error(f"[GETNET] Error en venta: {e}")
@@ -827,7 +869,8 @@ class GetnetModule:
                 f"✅ Reconciliación exitosa (por {motivo}): el POS confirma que el ticket {ticket} fue APROBADO "
                 f"(autorización {_rget(response, 'AuthorizationCode')}). JSON: {response_json}"
             )
-            return {"status": "aprobado", "response": response, "message": "Venta confirmada como APROBADA en el POS."}
+            return {"status": "aprobado", "response": normalizar_comprobante(response, ticket, "conciliacion"),
+                    "message": "Venta confirmada como APROBADA en el POS."}
 
         getnet_log.info(
             f"↪️ Reconciliación exitosa (por {motivo}): el POS confirma que el ticket {ticket} fue RECHAZADO/ANULADO "
@@ -835,7 +878,7 @@ class GetnetModule:
         )
         return {
             "status": "rechazado",
-            "response": response,
+            "response": normalizar_comprobante(response, ticket, "conciliacion"),
             "message": f"Venta confirmada como RECHAZADA/ANULADA en el POS (código {response_code}).",
         }
 
@@ -876,6 +919,7 @@ class GetnetModule:
                     f"📬 Tras reconectar, el POS entregó la respuesta pendiente del ticket {ticket}: "
                     f"código {code}. JSON: {json.dumps(response, ensure_ascii=False, default=str)}"
                 )
+                response = normalizar_comprobante(response, ticket, "conciliacion")
                 if code == 0:
                     return {"status": "aprobado", "response": response, "message": "Respuesta de la venta recibida tras reconectar."}
                 return {"status": "rechazado", "response": response,

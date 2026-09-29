@@ -616,3 +616,49 @@ def test_cancelar_pide_116_y_libera_la_caja():
         srv._stop_local_worker.set()
         srv._stop_cleanup.set()
         srv._stop_recon_monitor.set()
+
+
+# ── Misma forma de respuesta para venta normal y conciliada ───
+
+# Respuestas reales de un A920 (log del 2026-09-29): venta normal (Command 100)
+# y venta confirmada por conciliación (Command 101).
+RESP_100 = {"AccountNumber": "", "AccountingDate": "2026-09-29 11:16:40", "Amount": 100, "AuthorizationCode": "S4XSIZ",
+            "CardBrand": "MC", "CardType": "PR", "Cashback": 0, "CommerceCode": 403259, "EmployeeId": 1,
+            "FunctionCode": 100, "Last4Digits": "8746", "OperationId": 40, "PosMode": 1,
+            "RealDate": "2026-09-29 11:16:46", "ResponseCode": 0, "ResponseMessage": "Aprobado", "SaleType": 1,
+            "SharesAmount": 0, "SharesNumber": 0, "TerminalId": "20122399", "Ticket": "1790691393", "Tip": 0}
+RESP_101 = {"AccountingDate": "2026-09-29 11:15:10", "Amount": 100, "AuthorizationCode": "ZGM1GZ", "CardBrand": "MC",
+            "CardType": "PR", "CommerceCode": 403259, "FunctionCode": 101, "Last4Digits": 8746, "OperationId": 0,
+            "PosMode": 1, "RealDate": "2026-09-29 11:15:26", "ResponseCode": 0, "ResponseMessage": "Aprobado",
+            "SaleType": 0, "SharesNumber": 0, "TerminalId": "20122399"}
+
+
+def test_venta_normal_y_conciliada_tienen_los_mismos_campos(getnet, monkeypatch):
+    _envio(getnet, monkeypatch)
+    monkeypatch.setattr(getnet, "_read_response", lambda **kw: dict(RESP_100))
+    normal = getnet.do_sale_with_timeout(100, timeout=5, ticket="1790691393")["response"]
+
+    _ultimo(getnet, monkeypatch, {"status": "found", "response": dict(RESP_101)})
+    ts = time.mktime(time.strptime("2026-09-29 11:15:02", "%Y-%m-%d %H:%M:%S"))
+    conciliada = getnet.reconciliar_ticket("1790691302", 100, sent_at=ts)["response"]
+
+    assert set(normal) == set(conciliada)
+    assert normal["Origen"] == "venta" and conciliada["Origen"] == "conciliacion"
+    assert normal["OperationId"] == 40 and normal["Ticket"] == "1790691393"
+    assert conciliada["Ticket"] == "1790691302"      # el POS no lo manda: se completa con el nuestro
+    assert conciliada["OperationId"] is None          # 0 no es un comprobante real
+    assert conciliada["Last4Digits"] == "8746"        # mismo tipo que en la venta normal
+    assert conciliada["Tip"] is None and conciliada["EmployeeId"] is None
+    assert conciliada["FunctionCode"] == 101          # se sabe qué comando lo informó
+    assert conciliada["AuthorizationCode"] == "ZGM1GZ"
+
+
+def test_comprobante_de_otra_venta_no_se_disfraza_de_nuestro(getnet, monkeypatch):
+    _ultimo(getnet, monkeypatch, _found(ResponseCode=0, Amount=1000, OperationId=55))
+    res = getnet.reconciliar_ticket("1", 1000, sent_at=AHORA - 10_000, known_operation_ids={"55"})
+    assert res["status"] == "rechazado"
+    assert "Origen" not in res["response"] and "Ticket" not in res["response"]
+
+
+def test_last4_con_cero_inicial():
+    assert gm.normalizar_comprobante({"Last4Digits": 123}, "1", "venta")["Last4Digits"] == "0123"
