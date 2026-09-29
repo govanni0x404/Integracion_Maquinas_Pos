@@ -254,7 +254,10 @@ PANEL_HTML = """<!DOCTYPE html>
       'GETNET_MAX_ESPERA': 'Segundos máximos que una venta Getnet sin confirmar (ej. cable desconectado) mantiene abierta la petición esperando que el POS vuelva. Al cumplirse responde INDETERMINADA y se sigue validando en segundo plano. 0 = sin límite. Default 300 (5 min).',
       'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
       'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
-      'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"). Ej: https://mitienda.cl,https://otra.cl',
+      'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"), o sea que cualquier página abierta en esta PC podría intentar cobrar. Ej: https://mitienda.cl,https://otra.cl',
+      'BIND_HOST': '127.0.0.1 = la API solo acepta llamadas desde esta misma PC (lo recomendado si el sistema web corre en el navegador de la caja). 0.0.0.0 = acepta llamadas de toda la red (solo si otro equipo llama a esta caja). Requiere reiniciar.',
+      'AGENTES_REMOTOS': 'Habilita /register_agent, /poll, /result y /debug/queues (agentes remotos). Con false quedan deshabilitados y cualquier intento de uso queda registrado en el log técnico.',
+      'LOG_RETENCION_DIAS': 'Días que se guardan los logs diarios antes de borrarlos. 0 = no borrar nunca.',
       'MP_TERMINAL_ID': 'Terminal(es) Point de Mercado Pago de esta caja (ej. NEWLAND_N950__ABC123). Es independiente del TERMINAL_ID de Getnet/Transbank. Si hay más de uno, separarlos por coma; el sistema web elige cuál con mp_terminal_id en cada /pago.',
       'ALLOW_MP_TOKEN_IN_REQUEST': '⚠️ Si está en true, cualquiera que llame a /pago puede mandar su propio access_token de Mercado Pago en el request, en vez de usar el MP_ACCESS_TOKEN configurado acá. Útil solo si varias cajas/clientes usan cuentas de MP distintas. Dejar en false si no lo necesitás.',
     } %}
@@ -302,7 +305,22 @@ PANEL_HTML = """<!DOCTYPE html>
     <div class="param-row">
       <span class="param-key">ALLOWED_ORIGINS</span>
       <input class="param-val" name="ALLOWED_ORIGINS" value="{{ env_vars.get('ALLOWED_ORIGINS', '') }}" title="{{ hints['ALLOWED_ORIGINS'] }}" autocomplete="off"
-             placeholder="vacío = se permite cualquier origen (*)">
+             placeholder="⚠️ vacío = cualquier página web puede llamar a la API">
+    </div>
+
+    <div class="param-row">
+      <span class="param-key">BIND_HOST</span>
+      <input class="param-val" name="BIND_HOST" value="{{ env_vars.get('BIND_HOST', '127.0.0.1') }}" title="{{ hints['BIND_HOST'] }}" autocomplete="off">
+    </div>
+
+    <div class="param-row">
+      <span class="param-key">AGENTES_REMOTOS</span>
+      <input class="param-val" name="AGENTES_REMOTOS" value="{{ env_vars.get('AGENTES_REMOTOS', 'false') }}" title="{{ hints['AGENTES_REMOTOS'] }}" autocomplete="off">
+    </div>
+
+    <div class="param-row">
+      <span class="param-key">LOG_RETENCION_DIAS</span>
+      <input class="param-val" name="LOG_RETENCION_DIAS" value="{{ env_vars.get('LOG_RETENCION_DIAS', '60') }}" title="{{ hints['LOG_RETENCION_DIAS'] }}" autocomplete="off">
     </div>
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
@@ -399,7 +417,7 @@ PANEL_HTML = """<!DOCTYPE html>
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
       Otros parámetros
     </div>
-    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST'] %}
+    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
     {% for key, val in env_vars.items() %}
     {% if key not in known %}
     <div class="param-row">

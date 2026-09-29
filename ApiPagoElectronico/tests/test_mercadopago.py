@@ -331,19 +331,31 @@ def test_dos_terminales_mp_cobran_a_la_vez(server, monkeypatch):
     """Un cobro abierto en un terminal no bloquea al otro."""
     monkeypatch.setattr(api, "MP_TERMINALES", ["NEWLAND_A", "NEWLAND_B"])
     monkeypatch.setattr(api, "MP_INTERVALO_CONSULTA", 0.01)
-    _mp(monkeypatch, FakeMP([("at_terminal", None)]))
-    t = threading.Thread(target=lambda: server.app.test_client().post(
-        "/pago", json={**PAGO, "mp_terminal_id": "NEWLAND_A", "tx_id": "venta-a"}, headers=AUTH), daemon=True)
+
+    def http(method, url, headers=None, payload=None, timeout=15):
+        if method == "POST" and url.endswith("/cancel"):
+            return 200, {"id": url.split("/")[-2], "status": "canceled"}
+        if method == "POST":
+            return 201, {"id": "ORD_" + payload["config"]["point"]["terminal_id"][-1], "status": "created"}
+        orden = url.rsplit("/", 1)[-1]  # el cliente del terminal A no paga, el del B sí
+        return 200, {"id": orden, "status": "at_terminal" if orden == "ORD_A" else "processed",
+                     "status_detail": "accredited"}
+    monkeypatch.setattr(api, "_http_json", http)
+
+    out = {}
+    t = threading.Thread(target=lambda: out.setdefault("a", server.app.test_client().post(
+        "/pago", json={**PAGO, "mp_terminal_id": "NEWLAND_A", "tx_id": "venta-a"}, headers=AUTH)), daemon=True)
     t.start()
     fin = time.time() + 3
     while "venta-a" not in server.tasks and time.time() < fin:
         time.sleep(0.01)
 
-    _mp(monkeypatch, FakeMP([("processed", "accredited")]))
     r = server.app.test_client().post("/pago", json={**PAGO, "mp_terminal_id": "NEWLAND_B"}, headers=AUTH)
     assert r.status_code == 200 and r.get_json()["success"] is True
+    assert t.is_alive()  # el cobro del terminal A sigue esperando
     server.tasks["venta-a"]["cancel"].set()
     t.join(3)
+    assert out["a"].get_json()["estado"] == "RECHAZADO"
 
 
 def test_sin_terminal_mp_configurado_no_usa_el_de_getnet(client, monkeypatch):

@@ -45,6 +45,7 @@ def test_panel_escapa_datos_de_pendientes():
 
 def test_singleton_no_mata_un_pid_reutilizado(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    (tmp_path / singleton.LOCK_FILE).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / singleton.LOCK_FILE).write_text("4242")
     monkeypatch.setattr(singleton, "_pid_exists", lambda pid: True)
     monkeypatch.setattr(singleton, "_es_nuestra_instancia", lambda pid: False)

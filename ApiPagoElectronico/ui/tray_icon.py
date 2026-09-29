@@ -11,7 +11,7 @@ import subprocess
 import webbrowser
 from pathlib import Path
 from config.settings import APP_NAME, HTTP_PORT
-from core.logging_config import logger, current_log_file
+from core.logging_config import logger, current_log_file, LOG_DIR
 
 
 def _find_dotenv() -> str | None:
@@ -88,6 +88,10 @@ def _run_pystray(pos_module):
     def on_log(icon, item):
         _open_path(current_log_file())
 
+    def on_logs_folder(icon, item):
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _open_path(str(LOG_DIR))
+
     def on_env(icon, item):
         env_path = _find_dotenv()
         if env_path:
@@ -114,6 +118,7 @@ def _run_pystray(pos_module):
         pystray.MenuItem("Abrir panel de control", on_panel),
         pystray.MenuItem("Ver estado (JSON)", on_status),
         pystray.MenuItem("Ver log", on_log),
+        pystray.MenuItem("Abrir carpeta de logs", on_logs_folder),
         pystray.MenuItem("Abrir .env", on_env),
         pystray.MenuItem("Ver carpeta .env", on_env_folder),
         pystray.Menu.SEPARATOR,

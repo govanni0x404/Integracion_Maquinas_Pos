@@ -13,7 +13,7 @@ que interpretar JSON crudo ni tracebacks.
 import logging
 from pathlib import Path
 
-from core.logging_config import LOG_DIR, DailyFileHandler
+from core.logging_config import DailyFileHandler, log_dir_for
 
 _loggers = {}
 
@@ -26,7 +26,7 @@ def _build_logger(nombre):
     if not log.handlers:
         # Un archivo por día (<nombre>-<YYYY-MM-DD>.log), igual que el log técnico.
         try:
-            fh = DailyFileHandler(LOG_DIR, nombre)
+            fh = DailyFileHandler(log_dir_for(nombre), nombre)  # logs/<nombre>/
         except Exception:
             fh = DailyFileHandler(Path.home(), nombre)
         fh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))

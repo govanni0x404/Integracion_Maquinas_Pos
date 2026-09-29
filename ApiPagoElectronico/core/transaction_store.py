@@ -12,6 +12,7 @@ se conoce (o se reconcilia) el resultado final. Mientras una transacción
 quede en estado PENDIENTE o INDETERMINADA para una caja, esa caja debe
 bloquearse para nuevas ventas hasta resolverla (automática o manualmente).
 """
+import os
 import sqlite3
 import threading
 import json
@@ -31,8 +32,14 @@ _conn = None
 def _get_conn():
     global _conn
     if _conn is None:
+        os.makedirs(os.path.dirname(os.path.abspath(DB_FILE)), exist_ok=True)  # data/
         _conn = sqlite3.connect(DB_FILE, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
+        # WAL: un corte de luz a mitad de una escritura no corrompe la base y las
+        # lecturas (panel, /pago/estado) no esperan a las escrituras.
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA synchronous=NORMAL")
+        _conn.execute("PRAGMA busy_timeout=5000")
         _conn.execute(
             """
             CREATE TABLE IF NOT EXISTS transacciones (

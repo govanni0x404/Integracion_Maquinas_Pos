@@ -17,6 +17,8 @@ Instalador_*.exe
 .env
 
 # Datos y archivos de runtime
+logs/
+data/
 *.log
 *.db
 *.db-journal

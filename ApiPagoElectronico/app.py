@@ -2,12 +2,15 @@ import threading
 import sys
 from core.logging_config import logger
 from core.singleton import ensure_single_instance_interactive, cleanup_lock
-from core.firewall import open_firewall_port
+from core.firewall import open_firewall_port, close_firewall_port
 from pos.pos_module import POSModule
 from server.api_server import APIServer
 from pos.getnet_module import GetnetModule
 from ui.tray_icon import TrayIcon, SYSTRAY_AVAILABLE
-from config.settings import APP_NAME, PUERTOS_COM, HTTP_PORT, USAR_POS_FISICO, USAR_GETNET, _log_auth_diagnostics
+from config.settings import (
+    APP_NAME, PUERTOS_COM, HTTP_PORT, BIND_HOST, ESCUCHA_SOLO_LOCAL, USAR_POS_FISICO, USAR_GETNET,
+    _log_auth_diagnostics,
+)
 
 
 def _notify_windows(title: str, message: str):
@@ -80,15 +83,20 @@ def main():
         logger.info("Saliendo por decision del usuario o error al tomar el lock")
         return
 
-    # Firewall
+    # Firewall: escuchando solo en localhost no hace falta abrir nada (y se
+    # borran reglas que hayan quedado de versiones anteriores).
     try:
-        logger.info(f"Verificando reglas de firewall para el puerto {HTTP_PORT}...")
-        open_firewall_port(HTTP_PORT)
-        logger.info(f"Reglas de firewall listas para el puerto {HTTP_PORT}")
+        if ESCUCHA_SOLO_LOCAL:
+            logger.info(f"API solo local ({BIND_HOST}:{HTTP_PORT}): no se abre el firewall")
+            close_firewall_port()
+        else:
+            logger.info(f"Verificando reglas de firewall para el puerto {HTTP_PORT}...")
+            open_firewall_port(HTTP_PORT)
+            logger.info(f"Reglas de firewall listas para el puerto {HTTP_PORT}")
     except PermissionError:
         logger.warning("No se tienen permisos de administrador para modificar el firewall.")
     except Exception as e:
-        logger.exception("Error al abrir puerto en firewall: %s", e)
+        logger.exception("Error al configurar el firewall: %s", e)
 
     detected_ports = {"transbank": None, "getnet": None}
 

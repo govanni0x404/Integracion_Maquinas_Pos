@@ -175,6 +175,7 @@ echo.
     --hidden-import serial.tools ^
     --hidden-import serial.tools.list_ports ^
     --hidden-import flask_cors ^
+    --hidden-import waitress ^
     --hidden-import jinja2 ^
     --hidden-import jinja2.ext ^
     --hidden-import werkzeug ^

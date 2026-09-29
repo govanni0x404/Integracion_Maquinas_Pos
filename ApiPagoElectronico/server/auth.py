@@ -1,6 +1,9 @@
 import base64
 import hashlib
 import hmac
+import threading
+import time
+from collections import deque
 from functools import lru_cache, wraps
 from urllib.parse import urlsplit
 from flask import request, Response, jsonify
@@ -26,6 +29,56 @@ def _password_matches(pwd: str) -> bool:
     except Exception:
         return False
 
+# Fuerza bruta: tras MAX_FALLOS claves incorrectas en VENTANA_FALLOS segundos se
+# deja de calcular PBKDF2 durante BLOQUEO_SEGUNDOS (cada cálculo cuesta CPU a
+# propósito). Es global y no por IP porque con BIND_HOST=127.0.0.1 todo llega
+# desde loopback; para no bloquear a la caja misma, una clave que ya se validó
+# antes se sigue aceptando durante el bloqueo sin recalcular nada.
+MAX_FALLOS = 10
+VENTANA_FALLOS = 60
+BLOQUEO_SEGUNDOS = 60
+
+_fallos = deque()
+_bloqueado_hasta = 0.0
+_claves_validas = set()  # sha256 de claves ya verificadas
+_auth_lock = threading.Lock()
+
+
+def _reiniciar_bloqueo():
+    global _bloqueado_hasta
+    with _auth_lock:
+        _fallos.clear()
+        _claves_validas.clear()
+        _bloqueado_hasta = 0.0
+
+
+def _clave_valida(pwd: str) -> bool:
+    global _bloqueado_hasta
+    huella = hashlib.sha256(pwd.encode("utf-8")).hexdigest()
+    ahora = time.time()
+    with _auth_lock:
+        if huella in _claves_validas:
+            return True
+        if ahora < _bloqueado_hasta:
+            return False
+    ok = _password_matches(pwd)
+    with _auth_lock:
+        if ok:
+            _claves_validas.add(huella)
+            return True
+        _fallos.append(ahora)
+        while _fallos and _fallos[0] < ahora - VENTANA_FALLOS:
+            _fallos.popleft()
+        if len(_fallos) >= MAX_FALLOS:
+            _bloqueado_hasta = ahora + BLOQUEO_SEGUNDOS
+            _fallos.clear()
+            _log.warning(
+                f"[AUTH] {MAX_FALLOS} claves incorrectas en {VENTANA_FALLOS}s: se bloquean nuevos intentos "
+                f"por {BLOQUEO_SEGUNDOS}s (posible fuerza bruta)"
+            )
+    return False
+
+
 def check_basic_auth_header(auth_header: str) -> bool:
     """Devuelve True si Authorization header es Basic y usuario/clave coinciden."""
     if not auth_header or not auth_header.startswith("Basic "):
@@ -39,11 +92,12 @@ def check_basic_auth_header(auth_header: str) -> bool:
             return False
         user, pwd = decoded.split(":", 1)
         user_ok = hmac.compare_digest(user, API_AUTH_USER)
-        pass_ok = _password_matches(pwd)
+        pass_ok = user_ok and _clave_valida(pwd)
         if not user_ok or not pass_ok:
+            # repr + recorte: el usuario lo manda el cliente y no debe poder inyectar líneas en el log.
             _log.warning(
                 f"[AUTH] Credenciales inválidas — "
-                f"usuario_recibido='{user}' user_ok={user_ok} pass_ok={pass_ok}"
+                f"usuario_recibido={user[:40]!r} user_ok={user_ok} pass_ok={pass_ok}"
             )
         return user_ok and pass_ok
     except Exception as e:

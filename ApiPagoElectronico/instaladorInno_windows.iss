@@ -13,8 +13,8 @@ AppId={{A1E1C9A1-7B02-4E38-9D5A-1E8F3A2E0B11}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppName}
-; Instalación por usuario (%LOCALAPPDATA%\Programs): la app escribe .env, logs,
-; pos_gateway.db y el lock junto al .exe, y en Program Files no tendría permisos.
+; Instalación por usuario (%LOCALAPPDATA%\Programs): la app escribe el .env junto al
+; .exe y crea logs\ y data\ (base de datos y lock) al lado; en Program Files no tendría permisos.
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}

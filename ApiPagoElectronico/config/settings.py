@@ -82,6 +82,7 @@ def _find_and_load_dotenv():
             if not env_path.exists():
                 default_env = "\n".join([
                     "HTTP_PORT=5005",
+                    "BIND_HOST=127.0.0.1",
                     "ID_SUCURSAL=1",
                     "NOMBRE_CAJA=",
                     "TERMINAL_ID=",
@@ -166,7 +167,8 @@ def _log_auth_diagnostics():
 
     # También escribir a un archivo de diagnóstico directo (no depende del logger)
     try:
-        diag_path = os.path.join(os.getcwd(), "auth_diag.log")
+        os.makedirs(LOGS_DIR / "diagnostico", exist_ok=True)
+        diag_path = os.path.join(LOGS_DIR, "diagnostico", "auth_diag.log")
         import datetime
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(diag_path, "a", encoding="utf-8") as f:
@@ -176,13 +178,41 @@ def _log_auth_diagnostics():
         pass
 
 
-# Archivos
+# Archivos — todo ordenado en carpetas junto al .env (ver core/estructura.py):
+# logs/<general|getnet|transbank|mercadopago|diagnostico>/ y data/.
+BASE_DIR = Path(os.getcwd())  # _find_and_load_dotenv hizo chdir a la carpeta del .env
+DATA_DIR = BASE_DIR / "data"
 LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
-LOCK_FILE = os.environ.get("LOCK_FILE", "pos_gateway.lock")
-DB_FILE = os.environ.get("DB_FILE", "pos_gateway.db")
+# LOG_FILE absoluto (tests / diagnóstico): las carpetas de logs se arman al lado.
+LOGS_DIR = Path(LOG_FILE).parent if os.path.isabs(LOG_FILE) else BASE_DIR / "logs"
+LOCK_FILE = os.environ.get("LOCK_FILE", str(Path("data") / "pos_gateway.lock"))
+DB_FILE = os.environ.get("DB_FILE", str(DATA_DIR / "pos_gateway.db"))
+
+from core.estructura import migrar_archivos_sueltos  # noqa: E402
+
+try:
+    MIGRACION_INFO = migrar_archivos_sueltos(
+        BASE_DIR, DB_FILE, BASE_DIR / LOCK_FILE, LOGS_DIR, Path(LOG_FILE).stem,
+    )
+except Exception as _e:
+    MIGRACION_INFO = {"movidos": [], "errores": [str(_e)], "omitidos": []}
+# Días que se conservan los logs diarios (0 = no borrar nunca).
+try:
+    LOG_RETENCION_DIAS = max(0, int(os.environ.get("LOG_RETENCION_DIAS", "60").strip() or 0))
+except ValueError:
+    LOG_RETENCION_DIAS = 60
 
 # Puerto HTTP
 HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5005")))
+# Interfaz donde escucha la API. 127.0.0.1 = solo esta PC (el navegador de la
+# caja llama a localhost): nadie de la red puede llegar. 0.0.0.0 = toda la red
+# (solo si otro equipo necesita llamar a esta caja).
+BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+ESCUCHA_SOLO_LOCAL = BIND_HOST in ("127.0.0.1", "localhost", "::1")
+# Endpoints de agentes remotos (/register_agent, /poll, /result, /debug/queues).
+# Con el worker local no se necesitan, y /result permite marcar como aprobada
+# cualquier venta en curso: deshabilitados salvo que se activen explícitamente.
+AGENTES_REMOTOS = os.environ.get("AGENTES_REMOTOS", "false").lower() == "true"
 
 # Identificación
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")

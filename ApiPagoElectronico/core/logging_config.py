@@ -1,43 +1,18 @@
 import logging
-import sys
-import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from config.settings import APP_NAME
+from config.settings import APP_NAME, LOG_RETENCION_DIAS, LOGS_DIR, LOG_FILE as LOG_FILE_SETTING, MIGRACION_INFO
+from core.estructura import carpeta_de_log
 
-def _get_log_dir():
-    """
-    Determina el directorio para el archivo de log.
-
-    Orden de prioridad:
-    1. LOG_FILE absoluto en variables de entorno
-    2. Raíz del proyecto Python (directorio de app.py / main script)
-    3. CWD (en el .exe compilado es la carpeta del .env, junto al ejecutable)
-    """
-    # 1. LOG_FILE absoluto en env vars
-    env_log = os.environ.get("LOG_FILE", "")
-    if env_log and os.path.isabs(env_log):
-        return Path(env_log).parent, Path(env_log).name
-
-    # 2. Modo desarrollo: usar el directorio del script principal (sys.argv[0])
-    #    sys.executable en venv apunta a venv/bin/python3 — NO es útil para paths
-    try:
-        main_script = Path(sys.argv[0]).resolve()
-        if main_script.suffix == ".py":
-            # app.py → project_root/
-            return main_script.parent, "pos_gateway.log"
-    except Exception:
-        pass
-
-    # 3. CWD fallback
-    return Path(os.getcwd()), env_log or "pos_gateway.log"
-
-_log_dir, _log_filename = _get_log_dir()
-
-LOG_DIR = _log_dir
+LOG_DIR = Path(LOGS_DIR)  # raíz: logs/ junto al .env
 # Nombre base sin extensión (ej. "pos_gateway"), usado para armar
 # "<base>-<YYYY-MM-DD>.log" — un archivo de log distinto por día.
-LOG_BASENAME = Path(_log_filename).stem
+LOG_BASENAME = Path(LOG_FILE_SETTING).stem
+
+
+def log_dir_for(base_name: str = None) -> Path:
+    """Carpeta de un log: logs/general para el técnico, logs/<integración> para el resto."""
+    return carpeta_de_log(LOG_DIR, base_name or LOG_BASENAME, LOG_BASENAME)
 
 
 def daily_log_path(base_name: str = None, log_dir=None) -> Path:
@@ -48,7 +23,7 @@ def daily_log_path(base_name: str = None, log_dir=None) -> Path:
     no cachear el resultado en un proceso de larga duración.
     """
     base_name = base_name or LOG_BASENAME
-    log_dir = Path(log_dir) if log_dir else LOG_DIR
+    log_dir = Path(log_dir) if log_dir else log_dir_for(base_name)
     today = datetime.now().strftime("%Y-%m-%d")
     return log_dir / f"{base_name}-{today}.log"
 
@@ -76,12 +51,14 @@ class DailyFileHandler(logging.Handler):
         self._encoding = encoding
         self._current_date = None
         self._inner = None
+        self._log_dir.mkdir(parents=True, exist_ok=True)
         self._open_today()  # falla rápido acá si el directorio no es escribible
 
     def _open_today(self):
         today = datetime.now().strftime("%Y-%m-%d")
         if today == self._current_date and self._inner is not None:
             return
+        self._borrar_antiguos()
         path = self._log_dir / f"{self._base_name}-{today}.log"
         new_inner = logging.FileHandler(str(path), encoding=self._encoding)
         if self.formatter:
@@ -91,6 +68,19 @@ class DailyFileHandler(logging.Handler):
         self._current_date = today
         if old_inner is not None:
             old_inner.close()
+
+    def _borrar_antiguos(self):
+        """Borra los archivos de este log con más de LOG_RETENCION_DIAS días."""
+        if LOG_RETENCION_DIAS <= 0:
+            return
+        limite = (datetime.now() - timedelta(days=LOG_RETENCION_DIAS)).strftime("%Y-%m-%d")
+        try:
+            for f in self._log_dir.glob(f"{self._base_name}-*.log"):
+                fecha = f.stem[len(self._base_name) + 1:]
+                if len(fecha) == 10 and fecha < limite:
+                    f.unlink()
+        except Exception:
+            pass  # nunca impedir que se escriba el log por no poder limpiar
 
     def setFormatter(self, fmt):
         super().setFormatter(fmt)
@@ -124,7 +114,7 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     try:
-        fh = DailyFileHandler(LOG_DIR, LOG_BASENAME)
+        fh = DailyFileHandler(log_dir_for(LOG_BASENAME), LOG_BASENAME)
         formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
         fh.setFormatter(formatter)
         logger.addHandler(fh)
@@ -138,3 +128,9 @@ if not logger.handlers:
         logger.warning(f"No se pudo crear log en {LOG_DIR}: {e}. Usando {fallback_dir}")
 
 logger.info(f"Logger inicializado — log de hoy: {current_log_file()}")
+for _m in MIGRACION_INFO.get("movidos", []):
+    logger.info(f"[ORDEN] Archivo de versión anterior movido: {_m}")
+for _m in MIGRACION_INFO.get("omitidos", []):
+    logger.warning(f"[ORDEN] No se movió: {_m}")
+for _m in MIGRACION_INFO.get("errores", []):
+    logger.warning(f"[ORDEN] No se pudo mover (¿abierto por otra instancia?): {_m}")

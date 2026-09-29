@@ -26,6 +26,8 @@ from config.settings import (
     TIMEOUT_SERVER,
     MAX_TRANSACTION_TIME,
     HTTP_PORT,
+    BIND_HOST,
+    AGENTES_REMOTOS,
     USAR_POS_FISICO,
     USAR_GETNET,
     GETNET_MAX_ESPERA,
@@ -38,6 +40,10 @@ from core.business_logging import getnet_log, transbank_log, mercadopago_log, fm
 
 
 logger = logging.getLogger(APP_NAME)
+
+RUTAS_AGENTES_REMOTOS = {"/register_agent", "/poll", "/result", "/debug/queues"}
+# Endpoints que ejecutan algo en un POS y todavía aceptan GET por compatibilidad.
+RUTAS_COBRO_GET = {"/pago", "/pago/iniciar", "/pago/detalle"}
 
 # Cuánto espera /pago/cancelar a que el POS Getnet responda al Command 116
 # antes de dejar la venta INDETERMINADA (el cliente pudo haber ingresado el PIN).
@@ -99,7 +105,10 @@ MP_DESCRIPCION_ESTADOS = {
 }
 MP_REINTENTOS_CREACION = 3
 MP_PAUSA_REINTENTO = 2
-MP_INTERVALO_CONSULTA = 3
+MP_INTERVALO_CONSULTA = 2
+# La orden expira sola en MP un poco después de que dejamos de esperarla, así
+# una orden que no se pudo cancelar no deja el terminal bloqueado 16 minutos.
+MP_MARGEN_EXPIRACION = 120
 
 
 def _mp_aprobado(order_info):
@@ -341,7 +350,7 @@ def process_mercadopago(terminal_id, access_token, amount, timeout=TIMEOUT_SERVE
     payload = {
         "type": "point",
         "external_reference": external_reference,
-        "expiration_time": "PT16M",
+        "expiration_time": f"PT{int(timeout) + MP_MARGEN_EXPIRACION}S",
         "transactions": {"payments": [{"amount": str(amount)}]},
         "config": {
             "point": {
@@ -787,6 +796,27 @@ class APIServer:
         def _proteger_panel():
             if request.path == "/panel" or request.path.startswith("/panel/"):
                 return check_local_panel_request()
+            return None
+
+        @app.before_request
+        def _proteger_endpoints_sensibles():
+            if request.path in RUTAS_AGENTES_REMOTOS and not AGENTES_REMOTOS:
+                # Se deja rastro por si algún cliente todavía los usa.
+                logger.warning("[SEGURIDAD] Llamada a endpoint de agentes remotos deshabilitado: %s %s desde %s",
+                               request.method, request.path, request.remote_addr)
+                return jsonify({"error": "Endpoint deshabilitado (AGENTES_REMOTOS=false)"}), 410
+
+            if request.method == "GET" and request.path in RUTAS_COBRO_GET:
+                # Un fetch()/XHR del sistema web manda Sec-Fetch-Dest: empty; un <img>,
+                # <iframe>, <script> o un link abierto por otra página manda image/
+                # iframe/script/document. Si el navegador tiene la clave Basic en
+                # caché, esas peticiones irían autenticadas solas (CSRF): se rechazan.
+                dest = request.headers.get("Sec-Fetch-Dest")
+                if dest and dest != "empty":
+                    logger.warning("[SEGURIDAD] GET %s rechazado (Sec-Fetch-Dest=%s, origen=%s): posible CSRF",
+                                   request.path, dest, request.headers.get("Origin") or request.referrer)
+                    return jsonify({"error": "Use POST con JSON para esta operación"}), 403
+                logger.info("[COMPAT] GET %s (se recomienda POST con JSON)", request.path)
             return None
 
         @app.route("/auth/test")
@@ -2423,5 +2453,20 @@ class APIServer:
         return True, None, 200
 
     def run(self):
-        logger.info("Servidor Flask arrancando en puerto %s", HTTP_PORT)
-        self.app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True, use_reloader=False)
+        if not ALLOWED_ORIGINS:
+            logger.warning(
+                "[SEGURIDAD] ALLOWED_ORIGINS vacío: cualquier página web abierta en esta PC puede llamar a la API "
+                "desde el navegador. Configure el dominio del sistema web (ej. https://misistema.cl)."
+            )
+        try:
+            from waitress import serve
+        except ImportError:
+            logger.warning("waitress no instalado: se usa el servidor de desarrollo de Flask")
+            logger.info("Servidor Flask arrancando en %s:%s", BIND_HOST, HTTP_PORT)
+            self.app.run(host=BIND_HOST, port=HTTP_PORT, threaded=True, use_reloader=False)
+            return
+        logger.info("Servidor waitress arrancando en %s:%s", BIND_HOST, HTTP_PORT)
+        # Un /pago de Getnet o Mercado Pago deja un hilo ocupado hasta que el cliente
+        # termina de pagar (minutos): se dejan hilos de sobra para no encolar /status,
+        # /pago/estado o el panel detrás de ventas en curso.
+        serve(self.app, host=BIND_HOST, port=HTTP_PORT, threads=24, channel_timeout=900, ident=APP_NAME)

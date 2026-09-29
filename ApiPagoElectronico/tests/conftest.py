@@ -65,8 +65,10 @@ def test_password(monkeypatch):
     """Reemplaza el hash real por el de una clave de prueba conocida."""
     monkeypatch.setattr(auth, "API_AUTH_PASS_HASH", _hash(TEST_PASS))
     auth._password_matches.cache_clear()
+    auth._reiniciar_bloqueo()
     yield
     auth._password_matches.cache_clear()
+    auth._reiniciar_bloqueo()
 
 
 @pytest.fixture(autouse=True)

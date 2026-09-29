@@ -5,11 +5,10 @@ import logging
 import atexit
 import signal
 from pathlib import Path
-from config.settings import APP_NAME
+from config.settings import APP_NAME, LOCK_FILE
 from typing import Optional
 
 logger = logging.getLogger(APP_NAME)
-LOCK_FILE = "pos_gateway.lock"
 
 try:
     import psutil  # type: ignore
@@ -120,6 +119,7 @@ def _es_nuestra_instancia(pid: int) -> bool:
         return False
 
 def _write_lock_for_current_pid():
+    os.makedirs(os.path.dirname(os.path.abspath(LOCK_FILE)), exist_ok=True)  # data/
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))
     logger.info(f"Lock file creado: {LOCK_FILE} (PID={os.getpid()})")
