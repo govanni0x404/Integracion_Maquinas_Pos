@@ -50,7 +50,7 @@ def _mismo_monto(a, b):
         return str(a) == str(b)
 
 
-def _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operation_ids):
+def _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operation_ids, known_auth_codes=()):
     """
     ¿Este comprobante/respuesta del POS es de la venta `ticket`?
     Devuelve (True|False|None, motivo). None = no hay datos para saberlo.
@@ -61,10 +61,18 @@ def _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operati
     operation_id = _rget(response, "OperationId")
     fecha_ts = _parse_fecha_pos(_rget(response, "AccountingDate"))
     known = {str(x) for x in known_operation_ids if x not in (None, "", 0, "0")}
+    autorizacion = str(_rget(response, "AuthorizationCode", "") or "").strip()
+    autorizaciones_conocidas = {str(x).strip() for x in known_auth_codes if x}
 
     if pos_ticket:
         es_nuestro = pos_ticket == str(ticket).strip()
         motivo = f"ticket {pos_ticket}"
+    elif autorizacion and autorizacion in autorizaciones_conocidas:
+        # El 101 del A920 no trae Ticket y su OperationId es 0: sin esto, un
+        # comprobante de otra venta del mismo monto hecha hace menos de
+        # RECON_TOLERANCIA_RELOJ_SEGUNDOS se tomaba como el de esta venta.
+        es_nuestro = False
+        motivo = f"el comprobante con autorización {autorizacion} es de una venta anterior ya registrada"
     elif operation_id not in (None, "", 0, "0") and str(operation_id) in known:
         es_nuestro = False
         motivo = f"el comprobante {operation_id} es de una venta anterior ya registrada"
@@ -568,7 +576,7 @@ class GetnetModule:
 
         return None
     
-    def do_sale_with_timeout(self, amount, timeout=120, ticket=None):
+    def do_sale_with_timeout(self, amount, timeout=120, ticket=None, cancel=None):
         """
         Realizar venta con timeout (compatible con arquitectura existente)
 
@@ -577,13 +585,17 @@ class GetnetModule:
         con `reconciliar_ticket` si la confirmación no llega. El ticket
         siempre se devuelve en la respuesta, incluso en error/indeterminada.
 
+        cancel: threading.Event de la caja. Si ya está activo justo antes de
+        enviar, la venta no se envía; si se activa después, se pide al POS
+        cancelarla (Command 116).
+
         Returns:
-            dict: {"status": "success|failed|error|indeterminada", "response": {...}, "ticket": str}
+            dict: {"status": "success|failed|error|indeterminada|cancelled", "response": {...}, "ticket": str}
         """
         with self._serial_lock:
-            return self._do_sale_with_timeout_locked(amount, timeout=timeout, ticket=ticket)
+            return self._do_sale_with_timeout_locked(amount, timeout=timeout, ticket=ticket, cancel=cancel)
 
-    def _do_sale_with_timeout_locked(self, amount, timeout=120, ticket=None):
+    def _do_sale_with_timeout_locked(self, amount, timeout=120, ticket=None, cancel=None):
         logger.info(f"[GETNET] Iniciando venta: ${amount}")
 
         ticket = ticket or time.strftime("%H%M%S")
@@ -615,6 +627,14 @@ class GetnetModule:
                 "DateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
 
+            if cancel is not None and cancel.is_set():
+                # La caja canceló mientras se abría el puerto: el POS no recibió nada.
+                getnet_log.info(
+                    f"🚫 Venta CANCELADA desde la caja antes de enviarse al POS — ticket {ticket} — monto "
+                    f"{fmt_monto(amount)}. El POS no recibió nada, es seguro reintentar."
+                )
+                return {"status": "cancelled", "message": "Cancelada antes de enviarse al POS", "ticket": ticket}
+
             if not self._send_command(command):
                 if self._send_uncertain:
                     # Falló a mitad de la escritura (ej. se desconectó el cable
@@ -632,6 +652,9 @@ class GetnetModule:
 
             command_sent = True
             self._venta_en_curso = True
+            if cancel is not None and cancel.is_set():
+                # Se canceló justo mientras se enviaba: se le pide al POS (Command 116).
+                self._cancelar_venta.set()
             logger.info("[GETNET] Esperando usuario en POS...")
             getnet_log.info(f"⏳ Venta enviada al POS (ticket {ticket}), esperando que el cliente pague...")
             response = self._read_response(timeout=timeout, expected_function_code=100, cancelable=True)
@@ -776,7 +799,7 @@ class GetnetModule:
         finally:
             self.disconnect()
 
-    def reconciliar_ticket(self, ticket, amount=None, timeout=15, sent_at=None, known_operation_ids=()):
+    def reconciliar_ticket(self, ticket, amount=None, timeout=15, sent_at=None, known_operation_ids=(), known_auth_codes=()):
         """
         Intenta resolver una venta que quedó INDETERMINADA consultando al POS
         por su último comprobante (Command 101). Se llama cuando el POS vuelve
@@ -835,7 +858,8 @@ class GetnetModule:
 
         response = last["response"]
         response_json = json.dumps(response, ensure_ascii=False, default=str)
-        es_nuestro, motivo = _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operation_ids)
+        es_nuestro, motivo = _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operation_ids,
+                                                         known_auth_codes)
 
         if es_nuestro is None:
             getnet_log.info(
@@ -892,7 +916,8 @@ class GetnetModule:
         except Exception:
             return None
 
-    def resolver_venta_pendiente(self, ticket, amount=None, sent_at=None, known_operation_ids=(), escucha=5):
+    def resolver_venta_pendiente(self, ticket, amount=None, sent_at=None, known_operation_ids=(), escucha=5,
+                                 known_auth_codes=()):
         """
         Intenta conocer el resultado real de una venta que quedó sin confirmar.
         1) Abre el puerto y escucha unos segundos SIN enviar nada, por si el POS
@@ -910,7 +935,8 @@ class GetnetModule:
                 self.disconnect()
 
         if response:
-            es_nuestro, motivo = _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operation_ids)
+            es_nuestro, motivo = _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operation_ids,
+                                                             known_auth_codes)
             code = _rget(response, "ResponseCode")
             if es_nuestro is not False and code not in CODIGOS_ERROR_IMPRESION and (
                 amount is None or _rget(response, "Amount") is None or _mismo_monto(_rget(response, "Amount"), amount)
@@ -927,7 +953,7 @@ class GetnetModule:
             logger.warning("[GETNET] Respuesta pendiente descartada (%s): %s", motivo, response)
 
         return self.reconciliar_ticket(ticket, amount=amount, timeout=15, sent_at=sent_at,
-                                       known_operation_ids=known_operation_ids)
+                                       known_operation_ids=known_operation_ids, known_auth_codes=known_auth_codes)
 
     def get_current_port(self):
         """Obtener puerto actual"""

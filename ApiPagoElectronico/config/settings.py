@@ -89,6 +89,7 @@ def _find_and_load_dotenv():
                     "GETNET_TERMINAL_ID=",
                     "USAR_POS_FISICO=false",
                     "PUERTOS_COM=COM5,COM6,COM7,COM8",
+                    "TRANSBANK_MAX_ESPERA=300",
                     "USAR_GETNET=true",
                     "GETNET_MAX_ESPERA=300",
                     "MAX_TRANSACTION_TIME=90",
@@ -232,6 +233,15 @@ GETNET_TERMINAL_ID = os.environ.get("GETNET_TERMINAL_ID", "").strip() or ID_TERM
 # POS físico
 USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "false").lower() == "true"
 PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM5,COM6,COM7,COM8")
+
+# Segundos máximos que una petición /pago Transbank queda abierta esperando que
+# el POS vuelva (cable desconectado) cuando la venta quedó sin confirmar. Igual
+# que GETNET_MAX_ESPERA: al cumplirse responde INDETERMINADA y se sigue
+# validando en segundo plano. 0 o vacío = sin límite.
+try:
+    TRANSBANK_MAX_ESPERA = max(0, int(os.environ.get("TRANSBANK_MAX_ESPERA", "300").strip() or 0))
+except ValueError:
+    TRANSBANK_MAX_ESPERA = 300
 
 # Timeouts
 MAX_TRANSACTION_TIME = int(os.environ.get("MAX_TRANSACTION_TIME", "90"))

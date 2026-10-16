@@ -145,6 +145,37 @@ def test_recon_venta_anterior_por_operation_id_aunque_la_fecha_sea_reciente(getn
     assert res["status"] == "no_resuelto"
 
 
+def test_recon_a920_venta_anterior_reciente_por_codigo_de_autorizacion(getnet, monkeypatch):
+    """Caso real del A920: el 101 no trae Ticket y su OperationId es 0. Una venta
+    anterior del mismo monto aprobada hace 60 s caía dentro de la tolerancia de
+    reloj y se tomaba como la nuestra (APROBADA sin que el cliente pagara)."""
+    _ultimo(getnet, monkeypatch, _found(ResponseCode=0, Amount=1000, OperationId=0, AuthorizationCode="ZGM1GZ",
+                                        AccountingDate=_fecha(AHORA - 60)))
+    res = getnet.reconciliar_ticket("1", 1000, sent_at=AHORA, known_auth_codes={"ZGM1GZ"})
+    assert res["status"] == "no_resuelto"  # no es nuestra; la venta podría seguir en curso
+    assert "autorización ZGM1GZ" in res["message"]
+
+    enviado = AHORA - gm.RECON_VENTANA_SEGUNDOS - 10  # pasada la ventana: no se cobró
+    res = getnet.reconciliar_ticket("1", 1000, sent_at=enviado, known_auth_codes={"ZGM1GZ"})
+    assert res["status"] == "rechazado"
+
+
+def test_recon_a920_autorizacion_nueva_sigue_aprobando(getnet, monkeypatch):
+    _ultimo(getnet, monkeypatch, _found(ResponseCode=0, Amount=1000, OperationId=0, AuthorizationCode="NUEVA1",
+                                        AccountingDate=_fecha(AHORA + 20)))
+    res = getnet.reconciliar_ticket("1", 1000, sent_at=AHORA, known_auth_codes={"ZGM1GZ"})
+    assert res["status"] == "aprobado"
+
+
+def test_codigos_de_autorizacion_conocidos_desde_la_base():
+    tx_store.registrar_intento("vieja", "getnet", "1", "POS_TEST", "1", "CAJA_TEST", 1000)
+    tx_store.actualizar_estado("vieja", "APROBADO", raw_response={"status": "success",
+                                                                  "response": {"AuthorizationCode": "ZGM1GZ"}})
+    tx_store.registrar_intento("actual", "getnet", "2", "POS_TEST", "1", "CAJA_TEST", 1000)
+    assert tx_store.codigos_autorizacion_conocidos("getnet", excluir_tx_id="actual") == {"ZGM1GZ"}
+    assert tx_store.codigos_autorizacion_conocidos("getnet", excluir_tx_id="vieja") == set()
+
+
 def test_recon_venta_anterior_pasada_la_ventana_se_descarta(getnet, monkeypatch):
     enviado = AHORA - gm.RECON_VENTANA_SEGUNDOS - 10
     _ultimo(getnet, monkeypatch, _found(ResponseCode=0, Amount=1000, OperationId=55))
@@ -270,7 +301,7 @@ class FakeGetnet:
         self.ultimo = {"status": "error", "message": "POS desconectado"}
         self.recon_calls = []
 
-    def do_sale_with_timeout(self, amount, timeout=30, ticket=None):
+    def do_sale_with_timeout(self, amount, timeout=30, ticket=None, cancel=None):
         return {**self.venta, "ticket": ticket}
 
     def puerto_presente(self):
@@ -579,7 +610,7 @@ class FakeGetnetCancelable(FakeGetnet):
         self.en_curso = threading.Event()
         self.cancelar = threading.Event()
 
-    def do_sale_with_timeout(self, amount, timeout=30, ticket=None):
+    def do_sale_with_timeout(self, amount, timeout=30, ticket=None, cancel=None):
         self.en_curso.set()
         if self.cancelar.wait(3):
             return {"status": "failed", "cancelada_desde_caja": True, "ticket": ticket,
@@ -610,7 +641,7 @@ def test_cancelar_pide_116_y_libera_la_caja():
 
         # No quedó nada sin confirmar: la caja puede vender de nuevo
         fake.venta = {"status": "success", "response": {"ResponseCode": 0}}
-        fake.do_sale_with_timeout = lambda amount, timeout=30, ticket=None: {**fake.venta, "ticket": ticket}
+        fake.do_sale_with_timeout = lambda amount, timeout=30, ticket=None, cancel=None: {**fake.venta, "ticket": ticket}
         assert srv.app.test_client().post("/pago", json=VENTA, headers=AUTH).get_json()["estado"] == "APROBADO"
     finally:
         srv._stop_local_worker.set()
@@ -662,3 +693,79 @@ def test_comprobante_de_otra_venta_no_se_disfraza_de_nuestro(getnet, monkeypatch
 
 def test_last4_con_cero_inicial():
     assert gm.normalizar_comprobante({"Last4Digits": 123}, "1", "venta")["Last4Digits"] == "0123"
+
+
+# ── La limpieza nunca corta una venta en curso (error 1) ──────
+
+def test_limpieza_no_borra_la_venta_que_espera_al_pos(getnet_server):
+    """La petición sigue viva aunque pasen más de 10 minutos con el cable
+    desconectado: cuando llega el resultado, /pago lo entrega."""
+    srv, fake = getnet_server
+    t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-larga"})
+    assert _esperar(lambda: (tx_store.obtener("venta-larga") or {}).get("estado") == "INDETERMINADA")
+
+    srv.tasks["venta-larga"]["timestamp"] -= 3600  # lleva una hora esperando
+    r = srv.app.test_client().post("/pago/limpiar", headers=AUTH)
+    assert r.get_json()["eliminadas"] == 0
+    assert "venta-larga" in srv.tasks
+
+    srv.app.test_client().post("/panel/pendientes/venta-larga/resolver", json={"estado": "APROBADO"})
+    t.join(3)
+    assert not t.is_alive()
+    assert out["resp"].get_json()["estado"] == "APROBADO"
+
+
+def test_limpieza_borra_solo_tareas_terminadas(getnet_server):
+    srv, fake = getnet_server
+    viejo = time.time() - 3600
+    srv.tasks["terminada"] = {"result": {"status": "success"}, "timestamp": viejo, "event": threading.Event()}
+    srv.tasks["en-curso"] = {"result": None, "timestamp": viejo, "event": threading.Event()}
+    r = srv.app.test_client().post("/pago/limpiar", headers=AUTH)
+    assert r.get_json()["eliminadas"] == 1
+    assert "terminada" not in srv.tasks and "en-curso" in srv.tasks
+    srv.tasks.pop("en-curso")
+
+
+# ── Cancelar una venta que todavía no llega al POS (error 3) ──
+
+def _detener_worker(srv):
+    srv._stop_local_worker.set()
+    srv.local_worker_thread.join(3)
+
+
+def test_cancelar_en_la_cola_no_envia_la_venta_al_pos(getnet_server):
+    srv, fake = getnet_server
+    enviadas = []
+    fake.do_sale_with_timeout = lambda amount, timeout=30, ticket=None, cancel=None: enviadas.append(ticket) or {
+        "status": "success", "ticket": ticket}
+    _detener_worker(srv)  # la venta queda en la cola, como si el worker estuviera ocupado
+
+    t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-cola"})
+    assert _esperar(lambda: "venta-cola" in srv.tasks)
+    r = srv.app.test_client().post("/pago/cancelar/venta-cola", headers=AUTH)
+    assert r.status_code == 200 and r.get_json()["estado"] == "CANCELADO"
+    t.join(3)
+    assert out["resp"].get_json()["estado"] == "CANCELADO"
+    tx = tx_store.obtener("venta-cola")
+    assert tx["estado"] == "RECHAZADO" and tx["resuelto_por"] == "cancelación del cliente"
+
+    srv.start_local_worker()  # el worker toma la tarea cancelada: no la envía
+    time.sleep(1.5)
+    assert enviadas == []
+    assert tx_store.obtener("venta-cola")["estado"] == "RECHAZADO"
+    # La caja quedó libre
+    fake.do_sale_with_timeout = lambda amount, timeout=30, ticket=None, cancel=None: {"status": "success", "ticket": ticket}
+    assert srv.app.test_client().post("/pago", json=VENTA, headers=AUTH).get_json()["estado"] == "APROBADO"
+
+
+def test_modulo_no_envia_la_venta_si_ya_se_cancelo(monkeypatch):
+    """Cancelación mientras se abre el puerto: el Command 100 nunca sale."""
+    mod = GetnetModule()
+    enviados = []
+    monkeypatch.setattr(mod, "connect", lambda: True)
+    monkeypatch.setattr(mod, "_send_command", lambda cmd: enviados.append(cmd) or True)
+    cancel = threading.Event()
+    cancel.set()
+    res = mod.do_sale_with_timeout(1000, timeout=1, ticket="123", cancel=cancel)
+    assert res["status"] == "cancelled"
+    assert enviados == []

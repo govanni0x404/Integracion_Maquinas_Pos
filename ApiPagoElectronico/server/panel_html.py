@@ -327,6 +327,7 @@ PANEL_HTML = """<!DOCTYPE html>
   'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
   'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
   'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
+  'TRANSBANK_MAX_ESPERA': 'Segundos máximos que una venta Transbank sin confirmar (ej. cable desconectado) mantiene abierta la petición esperando que el POS vuelva; al volver se consulta su última venta. Al cumplirse responde INDETERMINADA y se sigue validando en segundo plano. 0 = sin límite. Default 300 (5 min).',
   'GETNET_MAX_ESPERA': 'Segundos máximos que una venta Getnet sin confirmar (ej. cable desconectado) mantiene abierta la petición esperando que el POS vuelva. Al cumplirse responde INDETERMINADA y se sigue validando en segundo plano. 0 = sin límite. Default 300 (5 min).',
   'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
   'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
@@ -371,7 +372,7 @@ PANEL_HTML = """<!DOCTYPE html>
 {% endmacro %}
 
 {% set tuu_on = (env_vars.get('USAR_TUU', 'false') | lower) == 'true' %}
-{% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','TRANSBANK_TERMINAL_ID','GETNET_TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','USAR_TUU','TUU_API_URL','TUU_API_KEY','TUU_DEVICES','ALLOW_TUU_KEY_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
+{% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','TRANSBANK_TERMINAL_ID','GETNET_TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','TRANSBANK_MAX_ESPERA','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','USAR_TUU','TUU_API_URL','TUU_API_KEY','TUU_DEVICES','ALLOW_TUU_KEY_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
 {% set extras = namespace(n=0) %}
 {% for key in env_vars %}{% if key not in known %}{% set extras.n = extras.n + 1 %}{% endif %}{% endfor %}
 
@@ -524,6 +525,8 @@ PANEL_HTML = """<!DOCTYPE html>
             {% endif %}
             {{ field('TRANSBANK_TERMINAL_ID', 'ID de terminal', env_vars.get('TRANSBANK_TERMINAL_ID') or env_vars.get('TERMINAL_ID', ''),
                      hints['TRANSBANK_TERMINAL_ID'], placeholder='identificador de la máquina Transbank (ej. TBK_CAJA1)') }}
+            {{ field('TRANSBANK_MAX_ESPERA', 'Espera máxima sin confirmar (s)', env_vars.get('TRANSBANK_MAX_ESPERA', '300'), hints['TRANSBANK_MAX_ESPERA'],
+                     placeholder='segundos (0 = sin límite)') }}
             {% if 'PUERTOS_COM' in env_vars %}
             <div class="field field-wide">
               <label class="field-label" for="puertosComInput"><span>Puertos COM</span><code>PUERTOS_COM</code></label>

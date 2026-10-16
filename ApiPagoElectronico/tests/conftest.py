@@ -26,6 +26,7 @@ ENV_FILE.write_text("\n".join([
     "TERMINAL_ID=POS_TEST",
     "USAR_POS_FISICO=false",
     "USAR_GETNET=false",
+    "TRANSBANK_MAX_ESPERA=1",
     "MAX_TRANSACTION_TIME=30",
     "TIMEOUT_SERVER=30",
     "MP_API_URL=https://mp.test/v1/orders",
@@ -100,6 +101,17 @@ class FakePOS:
 
     def get_current_port(self):
         return "COM_TEST"
+
+    # Reconexión: por defecto el cable sigue desconectado y la última venta no aclara nada.
+    presente = False
+    ultima_venta = {"status": "no_resuelto", "message": "POS desconectado"}
+
+    def puerto_presente(self):
+        return self.presente
+
+    def consultar_ultima_venta(self, ticket, amount=None, sent_at=None):
+        self.consultas = getattr(self, "consultas", []) + [{"ticket": ticket, "amount": amount}]
+        return self.ultima_venta
 
 
 @pytest.fixture

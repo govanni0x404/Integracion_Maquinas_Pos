@@ -157,6 +157,19 @@ def operation_ids_conocidos(tipo, excluir_tx_id=None, limite=200):
     este tipo. Sirve para reconocer que el "último comprobante" del POS es de
     una venta anterior y no de la que se está reconciliando.
     """
+    return _campo_de_respuestas(tipo, "operationid", excluir_tx_id, limite)
+
+
+def codigos_autorizacion_conocidos(tipo, excluir_tx_id=None, limite=200):
+    """
+    AuthorizationCode de las ventas ya registradas de este tipo. El A920 responde
+    el "último comprobante" (Command 101) sin Ticket y con OperationId 0, pero
+    con el código de autorización: es la única marca que identifica de qué venta es.
+    """
+    return _campo_de_respuestas(tipo, "authorizationcode", excluir_tx_id, limite)
+
+
+def _campo_de_respuestas(tipo, campo, excluir_tx_id, limite):
     with _lock:
         conn = _get_conn()
         rows = conn.execute(
@@ -177,6 +190,6 @@ def operation_ids_conocidos(tipo, excluir_tx_id=None, limite=200):
         if not isinstance(resp, dict):
             continue
         for k, v in resp.items():
-            if k.lower() == "operationid" and v not in (None, "", 0, "0"):
-                ids.add(str(v))
+            if k.lower() == campo and v not in (None, "", 0, "0") and str(v).strip():
+                ids.add(str(v).strip())
     return ids
