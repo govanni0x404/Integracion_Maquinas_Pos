@@ -143,3 +143,12 @@ def test_validaciones(client):
     assert client.post("/pago", json={**VENTA, "id_sucursal": "9"}, headers=AUTH).status_code == 403
     sin_monto = {k: v for k, v in VENTA.items() if k != "amount"}
     assert client.post("/pago", json=sin_monto, headers=AUTH).status_code == 400
+
+
+def test_transbank_y_getnet_tienen_terminal_propio(client, monkeypatch):
+    import server.api_server as api
+    monkeypatch.setattr(api, "TRANSBANK_TERMINAL_ID", "TBK_01")
+    monkeypatch.setattr(api, "GETNET_TERMINAL_ID", "GET_01")
+    # El terminal de Getnet no sirve para cobrar en Transbank
+    assert client.post("/pago", json={**VENTA, "terminal_id": "GET_01"}, headers=AUTH).status_code == 403
+    assert client.post("/pago", json={**VENTA, "terminal_id": "TBK_01"}, headers=AUTH).status_code == 200

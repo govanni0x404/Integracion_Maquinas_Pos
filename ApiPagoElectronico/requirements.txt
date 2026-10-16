@@ -8,3 +8,16 @@ pyserial==3.5
 python-dotenv==1.2.2
 transbank-pos-sdk==1.0.1
 pystray==0.19.5
+
+
+# 1. Crear el entorno virtual
+#python3 -m venv venv
+
+# 2. Activarlo
+#source venv/bin/activate
+
+# 3. Instalar los requerimientos
+#pip install -r requirements.txt
+
+# 4. Correr la app
+#python app.py

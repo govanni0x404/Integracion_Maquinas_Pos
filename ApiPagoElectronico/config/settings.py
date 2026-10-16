@@ -85,7 +85,8 @@ def _find_and_load_dotenv():
                     "BIND_HOST=127.0.0.1",
                     "ID_SUCURSAL=1",
                     "NOMBRE_CAJA=",
-                    "TERMINAL_ID=",
+                    "TRANSBANK_TERMINAL_ID=",
+                    "GETNET_TERMINAL_ID=",
                     "USAR_POS_FISICO=false",
                     "PUERTOS_COM=COM5,COM6,COM7,COM8",
                     "USAR_GETNET=true",
@@ -98,6 +99,11 @@ def _find_and_load_dotenv():
                     "MP_ACCESS_TOKEN=",
                     "MP_TERMINAL_ID=",
                     "ALLOW_MP_TOKEN_IN_REQUEST=false",
+                    "USAR_TUU=false",
+                    "TUU_API_URL=https://integrations.payment.haulmer.com",
+                    "TUU_API_KEY=",
+                    "TUU_DEVICES=",
+                    "ALLOW_TUU_KEY_IN_REQUEST=false",
                     "",
                 ])
                 env_path.write_text(default_env, encoding="utf-8")
@@ -179,7 +185,7 @@ def _log_auth_diagnostics():
 
 
 # Archivos — todo ordenado en carpetas junto al .env (ver core/estructura.py):
-# logs/<general|getnet|transbank|mercadopago|diagnostico>/ y data/.
+# logs/<general|getnet|transbank|mercadopago|tuu|diagnostico>/ y data/.
 BASE_DIR = Path(os.getcwd())  # _find_and_load_dotenv hizo chdir a la carpeta del .env
 DATA_DIR = BASE_DIR / "data"
 LOG_FILE = os.environ.get("LOG_FILE", "pos_gateway.log")
@@ -218,6 +224,10 @@ AGENTES_REMOTOS = os.environ.get("AGENTES_REMOTOS", "false").lower() == "true"
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
 NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
 ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
+# Cada máquina física tiene su propio identificador. TERMINAL_ID queda solo por
+# compatibilidad con .env anteriores: se usa si el propio de la máquina no está.
+TRANSBANK_TERMINAL_ID = os.environ.get("TRANSBANK_TERMINAL_ID", "").strip() or ID_TERMINAL
+GETNET_TERMINAL_ID = os.environ.get("GETNET_TERMINAL_ID", "").strip() or ID_TERMINAL
 
 # POS físico
 USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "false").lower() == "true"
@@ -236,6 +246,17 @@ MP_TERMINAL_ID = os.environ.get("MP_TERMINAL_ID", "")
 # Es independiente de TERMINAL_ID (Getnet/Transbank): nunca se usa uno por el otro.
 MP_TERMINALES = [t.strip() for t in MP_TERMINAL_ID.split(",") if t.strip()]
 ALLOW_MP_TOKEN_IN_REQUEST = os.environ.get("ALLOW_MP_TOKEN_IN_REQUEST", "false").lower() == "true"
+
+# TUU (Pago remoto, máquinas PRO2/Kozen): API en la nube, igual que Mercado Pago.
+USAR_TUU = os.environ.get("USAR_TUU", "false").lower() == "true"
+TUU_API_URL = (os.environ.get("TUU_API_URL", "").strip() or "https://integrations.payment.haulmer.com").rstrip("/")
+TUU_API_KEY = os.environ.get("TUU_API_KEY", "").strip()
+# Números de serie de las máquinas TUU de esta caja, separados por coma.
+TUU_DEVICES = os.environ.get("TUU_DEVICES", "")
+TUU_DISPOSITIVOS = [d.strip() for d in TUU_DEVICES.split(",") if d.strip()]
+# true = cada /pago puede traer la API key de su máquina en "access_token" (como
+# ALLOW_MP_TOKEN_IN_REQUEST). Si no la trae, se usa TUU_API_KEY.
+ALLOW_TUU_KEY_IN_REQUEST = os.environ.get("ALLOW_TUU_KEY_IN_REQUEST", "false").lower() == "true"
 
 _allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
 ALLOWED_ORIGINS = [x.strip() for x in _allowed_origins_raw.split(",") if x.strip()] or None

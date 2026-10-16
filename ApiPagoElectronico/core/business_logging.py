@@ -1,5 +1,5 @@
 """
-Logs de negocio: uno por integración de pago (Getnet, Transbank, Mercado Pago).
+Logs de negocio: uno por integración de pago (Getnet, Transbank, Mercado Pago, TUU).
 
 A diferencia del log técnico general (pos_gateway.log, que mezcla arranque,
 firewall, panel, HTTP, etc.), estos archivos existen para que cualquiera
@@ -36,7 +36,7 @@ def _build_logger(nombre):
 
 
 def get_business_logger(nombre: str):
-    """nombre: 'getnet' | 'transbank' | 'mercadopago'"""
+    """nombre: 'getnet' | 'transbank' | 'mercadopago' | 'tuu'"""
     if nombre not in _loggers:
         _loggers[nombre] = _build_logger(nombre)
     return _loggers[nombre]
@@ -53,3 +53,4 @@ def fmt_monto(amount):
 getnet_log = get_business_logger("getnet")
 transbank_log = get_business_logger("transbank")
 mercadopago_log = get_business_logger("mercadopago")
+tuu_log = get_business_logger("tuu")

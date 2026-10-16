@@ -6,9 +6,6 @@ import threading
 import queue
 import logging
 import traceback
-import http.client
-import urllib.request
-import urllib.error
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -18,6 +15,8 @@ from config.settings import (
     ID_SUCURSAL,
     NOMBRE_CAJA,
     ID_TERMINAL,
+    TRANSBANK_TERMINAL_ID,
+    GETNET_TERMINAL_ID,
     MP_API_URL,
     MP_ACCESS_TOKEN,
     MP_TERMINALES,
@@ -31,12 +30,19 @@ from config.settings import (
     USAR_POS_FISICO,
     USAR_GETNET,
     GETNET_MAX_ESPERA,
+    USAR_TUU,
+    TUU_API_KEY,
+    TUU_DISPOSITIVOS,
+    ALLOW_TUU_KEY_IN_REQUEST,
 )
 from server.auth import require_basic_auth, check_basic_auth_header, check_local_panel_request
 from server.panel_html import PANEL_HTML
 from pos.pos_module import POSModule
 from core import transaction_store as tx_store
-from core.business_logging import getnet_log, transbank_log, mercadopago_log, fmt_monto
+# _http_json se referencia por este nombre de módulo: los tests lo reemplazan acá.
+from core.http_util import http_json as _http_json, error_de_red_ambiguo as _error_de_red_ambiguo
+from core.business_logging import getnet_log, transbank_log, mercadopago_log, tuu_log, fmt_monto
+from pos import tuu_module as tuu
 
 
 logger = logging.getLogger(APP_NAME)
@@ -49,30 +55,53 @@ RUTAS_COBRO_GET = {"/pago", "/pago/iniciar", "/pago/detalle"}
 # antes de dejar la venta INDETERMINADA (el cliente pudo haber ingresado el PIN).
 ESPERA_CANCELACION_GETNET = 20
 
-def _http_json(method: str, url: str, headers: dict | None = None, payload: dict | None = None, timeout: int = 15):
-    data = None
-    req_headers = dict(headers or {})
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        req_headers.setdefault("Content-Type", "application/json")
+# Medio de pago -> cómo se reconcilia una venta INDETERMINADA (monitor y panel).
+RESUELTO_POR_MONITOR = {"getnet": "Command 101", "mercadopago": "API Mercado Pago", "tuu": "API TUU"}
 
-    req = urllib.request.Request(url, data=data, method=method.upper(), headers=req_headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = resp.getcode()
-            body = resp.read()
-    except urllib.error.HTTPError as e:
-        status = int(getattr(e, "code", 0) or 0)
-        try:
-            body = e.read()
-        except Exception:
-            body = b""
-    decoded = body.decode("utf-8", errors="replace") if body else ""
-    try:
-        parsed = json.loads(decoded) if decoded else {}
-    except Exception:
-        parsed = {"raw": decoded}
-    return status, parsed
+def _lista(valor):
+    return [x.strip() for x in str(valor or "").split(",") if x.strip()]
+
+
+def validar_identificadores_maquinas(env):
+    """
+    Cada máquina de la caja necesita sus propios identificadores y credenciales:
+    si dos integraciones comparten uno, una venta puede terminar en la máquina
+    equivocada. env: valores finales del .env (los actuales + los editados).
+    Returns: texto del error, o None si está todo bien. Nunca incluye secretos.
+    """
+    # Solo se comparan los valores escritos en cada campo: el TERMINAL_ID de un
+    # .env anterior (compartido por Transbank y Getnet) cuenta una sola vez.
+    grupos = {
+        "TRANSBANK_TERMINAL_ID": _lista(env.get("TRANSBANK_TERMINAL_ID")),
+        "GETNET_TERMINAL_ID": _lista(env.get("GETNET_TERMINAL_ID")),
+        "MP_TERMINAL_ID": _lista(env.get("MP_TERMINAL_ID")),
+        "TUU_DEVICES": _lista(env.get("TUU_DEVICES")),
+    }
+    if not grupos["TRANSBANK_TERMINAL_ID"] and not grupos["GETNET_TERMINAL_ID"]:
+        grupos["TERMINAL_ID"] = _lista(env.get("TERMINAL_ID"))
+    vistos = {}
+    for campo, valores in grupos.items():
+        for v in valores:
+            if v in vistos and vistos[v] != campo:
+                return (f"{vistos[v]} y {campo} no pueden tener el mismo valor ('{v}'): "
+                        "cada máquina necesita su propio identificador")
+            vistos[v] = campo
+
+    mp_token = (env.get("MP_ACCESS_TOKEN") or "").strip()
+    tuu_key = (env.get("TUU_API_KEY") or "").strip()
+    if mp_token and tuu_key and mp_token == tuu_key:
+        return "MP_ACCESS_TOKEN y TUU_API_KEY no pueden ser iguales: cada una es la credencial de su propia API"
+    secretos = {"MP_ACCESS_TOKEN": mp_token, "TUU_API_KEY": tuu_key}
+    for campo, valores in grupos.items():
+        for v in valores:
+            for nombre, secreto in secretos.items():
+                if secreto and v == secreto:
+                    return f"{campo} contiene el valor de {nombre}: ahí va el identificador de la máquina, no la credencial"
+            if v.startswith(("APP_USR-", "TEST-")):
+                return (f"{campo} parece contener un access token de Mercado Pago (empieza con "
+                        f"'{v.split('-')[0]}-'): el token va en MP_ACCESS_TOKEN")
+    return None
+
 
 def _monto_valido(amount):
     """Monto de venta en pesos: entero positivo (acepta "1500" o 1500, no 15.5 ni -1)."""
@@ -128,14 +157,6 @@ def _mp_headers(access_token, idempotency_key=None):
     if idempotency_key:
         headers["X-Idempotency-Key"] = idempotency_key
     return headers
-
-
-def _error_de_red_ambiguo(e):
-    """True si, pese al error, el pedido pudo haber llegado a Mercado Pago
-    (timeout o conexión cortada después de enviarlo). Un DNS caído o una
-    conexión rechazada, en cambio, garantizan que no salió nada."""
-    reason = getattr(e, "reason", e)
-    return isinstance(reason, (TimeoutError, ConnectionResetError, http.client.HTTPException))
 
 
 def _mp_describir_error(code, body):
@@ -495,6 +516,8 @@ class APIServer:
         # tx_id Getnet cuya petición HTTP sigue abierta esperando que el POS vuelva
         # (las resuelve el worker, no el monitor en background).
         self._esperando_getnet = set()
+        # tx_id -> API key de TUU recibida en el request (solo en memoria, para el monitor).
+        self._tuu_keys = {}
         self._esperando_lock = threading.Lock()
         self._stop_recon_monitor = threading.Event()
 
@@ -668,7 +691,7 @@ class APIServer:
                             tx_store.actualizar_estado(tx_id, "ERROR", raw_response={"status": "error", "message": str(e)})
                         with self.busy_lock:
                             self.busy_boxes.discard((task.get("id_sucursal"), task.get("nombre_caja")))
-                        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log, "mercadopago": mercadopago_log}.get(task.get("type"))
+                        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log, "mercadopago": mercadopago_log, "tuu": tuu_log}.get(task.get("type"))
                         if _tipo_log:
                             _tipo_log.info(f"❌ Error interno inesperado procesando la venta (tx {tx_id}): {e}")
                     except Exception:
@@ -719,7 +742,7 @@ class APIServer:
             pass
         logger.info("Tarea de limpieza detenida")
 
-    # ---------- Monitor de reconciliación automática (Getnet y Mercado Pago) ----------
+    # ---------- Monitor de reconciliación automática (Getnet, Mercado Pago y TUU) ----------
     def start_reconciliation_monitor(self, interval=30):
         """
         Reintenta periódicamente resolver transacciones que quedaron INDETERMINADA:
@@ -732,6 +755,8 @@ class APIServer:
         - Mercado Pago: orden que no se pudo cancelar al dejar de esperarla; se
           consulta su estado en la API hasta que sea definitivo (a más tardar
           expira sola en MP).
+        - TUU: solicitud que no se puede cancelar por API; se consulta por GET
+          hasta que la máquina la complete, la rechace o se cancele en ella.
         """
         self._stop_recon_monitor.clear()
 
@@ -748,9 +773,9 @@ class APIServer:
                     for tx in pendientes:
                         if tx.get("tipo") == "getnet" and not self.getnet:
                             continue
-                        if tx.get("tipo") not in ("getnet", "mercadopago"):
+                        if tx.get("tipo") not in RESUELTO_POR_MONITOR:
                             continue
-                        _tipo_log = getnet_log if tx.get("tipo") == "getnet" else mercadopago_log
+                        _tipo_log = {"getnet": getnet_log, "mercadopago": mercadopago_log, "tuu": tuu_log}[tx["tipo"]]
                         _tipo_log.info(
                             f"🔁 Monitor automático: reintentando reconciliar el ticket {tx.get('ticket')} "
                             f"(tx {tx['tx_id']})..."
@@ -758,8 +783,7 @@ class APIServer:
                         recon = self.reconciliar(tx)
                         nuevo_estado = self.aplicar_reconciliacion(
                             tx, recon,
-                            resuelto_por="monitor automático (Command 101)" if tx.get("tipo") == "getnet"
-                            else "monitor automático (API Mercado Pago)",
+                            resuelto_por=f"monitor automático ({RESUELTO_POR_MONITOR[tx['tipo']]})",
                         )
                         if nuevo_estado == "INDETERMINADA":
                             continue  # sigue sin poder confirmarse, se reintenta en el próximo ciclo
@@ -870,6 +894,8 @@ class APIServer:
             mp_token_configured = bool((env_vars.get("MP_ACCESS_TOKEN", "") or "").strip())
             env_vars_ui = dict(env_vars)
             env_vars_ui.pop("MP_ACCESS_TOKEN", None)
+            tuu_key_configured = bool((env_vars.get("TUU_API_KEY", "") or "").strip())
+            env_vars_ui.pop("TUU_API_KEY", None)
             # Si el .env no los define, el panel muestra los valores por defecto
             # con los que realmente corre el servicio (Getnet sí, Transbank no).
             env_vars_ui.setdefault("USAR_POS_FISICO", "false")
@@ -895,6 +921,8 @@ class APIServer:
                 "id_sucursal":   ID_SUCURSAL,
                 "nombre_caja":   NOMBRE_CAJA,
                 "id_terminal":   ID_TERMINAL,
+                "terminal_transbank": TRANSBANK_TERMINAL_ID,
+                "terminal_getnet": GETNET_TERMINAL_ID,
                 "usar_pos":      str(USAR_POS_FISICO).lower(),
                 "usar_getnet":   str(USAR_GETNET).lower(),
                 "max_tx_time":   MAX_TRANSACTION_TIME,
@@ -909,6 +937,7 @@ class APIServer:
                 "mp_enabled":    env_vars.get("ALLOWED_MP", None) is not None
                                  or "ALLOWED_MP" not in env_vars,
                 "mp_token_configured": mp_token_configured,
+                "tuu_key_configured": tuu_key_configured,
                 "is_windows": is_windows,
                 "autostart_enabled": autostart_enabled,
             })
@@ -936,6 +965,9 @@ class APIServer:
                 if k == "MP_API_URL" and v and not v.startswith("https://api.mercadopago.com/"):
                     # El token de Mercado Pago se envía a esta URL: no puede apuntar a otro host.
                     return jsonify({"ok": False, "error": "MP_API_URL debe comenzar con https://api.mercadopago.com/"}), 400
+                if k == "TUU_API_URL" and v and not (v.rstrip("/") + "/").startswith("https://integrations.payment.haulmer.com/"):
+                    # La API key de TUU se envía a esta URL: no puede apuntar a otro host.
+                    return jsonify({"ok": False, "error": "TUU_API_URL debe comenzar con https://integrations.payment.haulmer.com"}), 400
                 data[k] = v
 
             env_path = None
@@ -955,6 +987,16 @@ class APIServer:
             # Leer .env actual
             with open(env_path, encoding="utf-8") as f:
                 lines = f.readlines()
+
+            actuales = {}
+            for line in lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    k, _, v = stripped.partition("=")
+                    actuales[k.strip()] = v.strip()
+            error = validar_identificadores_maquinas({**actuales, **data})
+            if error:
+                return jsonify({"ok": False, "error": error}), 400
 
             # Actualizar valores
             updated = set()
@@ -984,7 +1026,7 @@ class APIServer:
         def panel_log():
             """
             Devuelve las últimas 100 líneas del log de HOY, como texto plano.
-            ?tipo=general (default, técnico) | getnet | transbank | mercadopago (narrados por venta).
+            ?tipo=general (default, técnico) | getnet | transbank | mercadopago | tuu (narrados por venta).
             Cada uno vive en un archivo por día (<tipo>-YYYY-MM-DD.log); los días
             anteriores quedan en el disco con su propio archivo, no se muestran acá.
             """
@@ -993,7 +1035,7 @@ class APIServer:
             tipo = request.args.get("tipo", "general")
             if tipo == "general":
                 log_path = str(daily_log_path(LOG_BASENAME))
-            elif tipo in ("getnet", "transbank", "mercadopago"):
+            elif tipo in ("getnet", "transbank", "mercadopago", "tuu"):
                 log_path = str(daily_log_path(tipo))
             else:
                 return "tipo inválido", 400
@@ -1018,20 +1060,19 @@ class APIServer:
 
         @app.route("/panel/pendientes/<tx_id>/reconciliar", methods=["POST"])
         def panel_pendientes_reconciliar(tx_id):
-            """Reconsulta el resultado real: al POS Getnet (Command 101) o a la API de Mercado Pago."""
+            """Reconsulta el resultado real: al POS Getnet (Command 101) o a la API de Mercado Pago / TUU."""
             tx = tx_store.obtener(tx_id)
             if not tx:
                 return jsonify({"ok": False, "error": "Transacción no encontrada"}), 404
-            if not ((tx.get("tipo") == "getnet" and self.getnet) or tx.get("tipo") == "mercadopago"):
-                return jsonify({"ok": False, "error": "Reconciliación automática solo disponible para Getnet y Mercado Pago"}), 400
+            if not ((tx.get("tipo") == "getnet" and self.getnet) or tx.get("tipo") in ("mercadopago", "tuu")):
+                return jsonify({"ok": False, "error": "Reconciliación automática solo disponible para Getnet, Mercado Pago y TUU"}), 400
 
-            _tipo_log = getnet_log if tx.get("tipo") == "getnet" else mercadopago_log
+            _tipo_log = {"getnet": getnet_log, "mercadopago": mercadopago_log, "tuu": tuu_log}[tx["tipo"]]
             _tipo_log.info(f"👤 Un operador pidió desde el panel reconsultar el ticket {tx.get('ticket')} (tx {tx_id}).")
             recon = self.reconciliar(tx)
             nuevo_estado = self.aplicar_reconciliacion(
                 tx, recon,
-                resuelto_por="sistema (Command 101, gatillado desde panel)" if tx.get("tipo") == "getnet"
-                else "sistema (API Mercado Pago, gatillado desde panel)",
+                resuelto_por=f"sistema ({RESUELTO_POR_MONITOR[tx['tipo']]}, gatillado desde panel)",
                 guardar_no_resuelto=True,
             )
             logger.info("Reconciliación manual (panel) tx=%s -> %s", tx_id, nuevo_estado)
@@ -1438,7 +1479,7 @@ class APIServer:
                     return jsonify({"error": "timeout debe ser un número válido"}), 400
                 
                 # Validar que terminal_id coincida con el del .env
-                if terminal_id != ID_TERMINAL:
+                if str(terminal_id) != GETNET_TERMINAL_ID:
                     return jsonify({
                         "status": "forbidden",
                         "message": f"El terminal_id no coincide con las credenciales de configuración"
@@ -1623,7 +1664,7 @@ class APIServer:
                     return jsonify({"error": "timeout debe ser un número válido"}), 400
 
                 #validar que terminal_id coincida con el del .env
-                if terminal_id_transbank != ID_TERMINAL:
+                if str(terminal_id_transbank) != TRANSBANK_TERMINAL_ID:
                     return jsonify({
                         "status": "forbidden",
                         "message": f"El terminal_id no coincide con las credenciales de configuración"
@@ -1887,6 +1928,10 @@ class APIServer:
                 )
                 return jsonify(respuesta), 200
 
+            # TUU FLOW (Pago remoto por API, sin cancelación)
+            elif pos_type == "tuu":
+                return self._pago_tuu(data, id_sucursal, nombre_caja, timeout)
+
             else:
                 return jsonify({"error": "Tipo POS no soportado"}), 400
 
@@ -1900,6 +1945,8 @@ class APIServer:
                 "id_sucursal": ID_SUCURSAL,
                 "nombre_caja": NOMBRE_CAJA,
                 "id_terminal": ID_TERMINAL,
+                "terminal_transbank": TRANSBANK_TERMINAL_ID,
+                "terminal_getnet": GETNET_TERMINAL_ID,
                 "usa_pos_fisico": self.pos.is_online() if self.pos else False,
                 "agents_count": agents_count,
                 "current_port": self.pos.get_current_port() if self.pos else None
@@ -1965,6 +2012,17 @@ class APIServer:
                         "terminales": MP_TERMINALES,
                         "message": "Mercado Pago configurado" if token_ok else "Falta MP_ACCESS_TOKEN en configuración",
                     }), 200 if token_ok else 503
+                elif tipo == "tuu":
+                    # Solo revisa la configuración: no gasta cuota de la API de TUU.
+                    key_ok = bool(TUU_API_KEY) or ALLOW_TUU_KEY_IN_REQUEST
+                    faltan = [n for n, ok in (("USAR_TUU=true", USAR_TUU),
+                                              ("TUU_API_KEY o ALLOW_TUU_KEY_IN_REQUEST=true", key_ok)) if not ok]
+                    return jsonify({
+                        "success": True,
+                        "online": not faltan,
+                        "dispositivos": TUU_DISPOSITIVOS,
+                        "message": "TUU configurado" if not faltan else f"Falta configurar: {', '.join(faltan)}",
+                    }), 200 if not faltan else 503
                 else:
                     # Sin tipo especificado → ping simple
                     logger.info("[HTTP /online] ping simple (sin tipo)")
@@ -2047,7 +2105,7 @@ class APIServer:
 
             if pos_type == "transbank":
                 amount = data.get("amount")
-                id_terminal = data.get("id_terminal", ID_TERMINAL)
+                id_terminal = data.get("id_terminal", TRANSBANK_TERMINAL_ID)
 
                 amount = _monto_valido(amount)
                 if amount is None:
@@ -2186,6 +2244,18 @@ class APIServer:
                                 "message": "Se pidió cancelar la orden en Mercado Pago. El resultado final llega "
                                            f"en la respuesta de /pago o en /pago/estado/{tx_id}."}), 202
 
+            if tipo == "tuu":
+                # TUU no permite retirar la solicitud por API: solo se deja de esperar.
+                # /pago responde INDETERMINADA; si el cobro se cancela en la máquina, el
+                # GET pasa a "Canceled" y el monitor la resuelve sola.
+                task["cancel"].set()
+                tuu_log.info(f"✋ El cliente dejó de esperar la venta (tx {tx_id}, {task.get('nombre_caja')}); "
+                             "la solicitud sigue viva en TUU.")
+                return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "INDETERMINADA",
+                                "message": "TUU no permite cancelar por API: cancele el cobro en la máquina (Modo "
+                                           "Integración). La venta queda sin confirmar y se reconcilia sola; "
+                                           "no reintente el cobro."}), 202
+
             if tipo == "getnet" and self.getnet and self.getnet.solicitar_cancelacion():
                 # La venta está esperando en el POS: se le pide cancelarla (Command 116)
                 # y se espera a que el worker informe el resultado.
@@ -2300,6 +2370,8 @@ class APIServer:
         """Resultado real de una transacción sin confirmar, según su medio de pago."""
         if tx.get("tipo") == "mercadopago":
             return self.reconciliar_mercadopago(tx)
+        if tx.get("tipo") == "tuu":
+            return tuu.reconciliar_tuu(tx, self._tuu_keys.get(tx.get("tx_id")) or TUU_API_KEY)
         return self.reconciliar_getnet(tx)
 
     def aplicar_reconciliacion(self, tx, recon, resuelto_por, guardar_no_resuelto=False):
@@ -2316,6 +2388,7 @@ class APIServer:
         if nuevo_estado != "INDETERMINADA":
             with self.busy_lock:
                 self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+            self._tuu_keys.pop(tx["tx_id"], None)
         return nuevo_estado
 
     def esperar_resolucion_getnet(self, tx_id, cancel, intervalo=5, espera_tras_intento=15, reescaneo=30,
@@ -2418,6 +2491,166 @@ class APIServer:
             self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
         logger.info("Resultado tardío aplicado tx=%s -> %s", tx_id, estado)
 
+    # ---------- TUU (Pago remoto) ----------
+    def resolver_dispositivo_tuu(self, terminal_id):
+        """La máquina TUU (número de serie) viene en terminal_id. Con TUU_DEVICES
+        configurado debe ser una de ellas; sin él se acepta la del request.
+        Returns: (serie, error) — error es un texto si no se pudo elegir."""
+        terminal_id = str(terminal_id).strip() if terminal_id is not None else ""
+        if not terminal_id:
+            return None, "Es necesario el terminal_id (número de serie de la máquina TUU)"
+        if TUU_DISPOSITIVOS and terminal_id not in TUU_DISPOSITIVOS:
+            return None, f"La máquina '{terminal_id}' no está configurada en TUU_DEVICES ({', '.join(TUU_DISPOSITIVOS)})"
+        return terminal_id, None
+
+    def _pago_tuu(self, data, id_sucursal, nombre_caja, timeout):
+        """/pago con type=tuu. Se procesa en el hilo de la petición, como Mercado Pago."""
+        if not USAR_TUU:
+            return jsonify({"error": "TUU no habilitado en esta máquina (USAR_TUU)"}), 503
+        if not data.get("nombre_caja"):
+            return jsonify({"error": "Es necesario el nombre_caja"}), 400
+        api_key = None
+        if ALLOW_TUU_KEY_IN_REQUEST:
+            api_key = str(data.get("access_token") or "").strip() or None
+        api_key = api_key or TUU_API_KEY
+        if not api_key:
+            return jsonify({"error": "Falta la API key de TUU: envíela en access_token (con "
+                                     "ALLOW_TUU_KEY_IN_REQUEST=true) o configure TUU_API_KEY"}), 400
+
+        if data.get("amount") is None:
+            return jsonify({"error": "Es necesario el monto de venta (amount)"}), 400
+        if data.get("timeout") is None:
+            return jsonify({"error": "Es necesario el timeout"}), 400
+        try:
+            timeout = max(30, min(int(data.get("timeout")), 300))
+        except (ValueError, TypeError):
+            return jsonify({"error": "timeout debe ser un número válido"}), 400
+
+        amount = _monto_valido(data.get("amount"))
+        if amount is None or not (tuu.TUU_MONTO_MIN <= amount <= tuu.TUU_MONTO_MAX):
+            return jsonify({"error": f"El monto debe ser un entero entre {tuu.TUU_MONTO_MIN} y {tuu.TUU_MONTO_MAX}"}), 400
+
+        metodo = str(data.get("payment_method") or "debito").strip().lower()
+        if metodo not in tuu.TUU_METODOS_PAGO:
+            return jsonify({"error": "payment_method debe ser 'debito' o 'credito'"}), 400
+
+        device, device_error = self.resolver_dispositivo_tuu(data.get("terminal_id"))
+        if device_error:
+            tuu_log.info(f"❌ Venta rechazada por el sistema (monto {fmt_monto(amount)}): {device_error}")
+            return jsonify({"error": device_error, "dispositivos_configurados": TUU_DISPOSITIVOS}), 400
+
+        tx_id_input = data.get("tx_id")
+        if tx_id_input is not None:
+            tx_id_input = str(tx_id_input).strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tx_id_input):
+                return jsonify({"error": "tx_id inválido (solo letras, números, '-' y '_', máx. 64)"}), 400
+            if tx_store.obtener(tx_id_input):
+                return jsonify({"error": "tx_id ya fue usado en otra venta", "transaction_id": tx_id_input}), 409
+        tx_id = tx_id_input or str(uuid.uuid4())
+
+        # El recurso físico es la máquina: una solicitud sin resolver en ella
+        # bloquea ventas nuevas. Nunca se crea una segunda solicitud con otra
+        # clave: ambas podrían llegar a la máquina y cobrar dos veces.
+        runner_id_sucursal = str(ID_SUCURSAL)
+        caja_tuu = f"tuu:{device}"
+        pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, caja_tuu)
+        if pendiente:
+            logger.warning("Venta TUU bloqueada: transacción previa sin resolver tx=%s", pendiente)
+            tuu_log.info(
+                f"🔒 Venta rechazada por el sistema: la máquina {device} tiene una solicitud anterior "
+                f"({pendiente}) sin confirmar. No se creó ninguna solicitud nueva."
+            )
+            return jsonify({
+                "status": "unresolved_previous_transaction",
+                "message": "Hay una venta TUU previa en esta máquina sin confirmar. Revise la máquina; "
+                           "se reconcilia sola o puede resolverse desde el panel.",
+                "pending_transaction_id": pendiente,
+            }), 409
+
+        key = (runner_id_sucursal, caja_tuu)
+        with self.busy_lock:
+            if key in self.busy_boxes:
+                tuu_log.info(
+                    f"🔁 Venta rechazada: la máquina {device} ya tiene otro cobro en curso "
+                    f"(monto {fmt_monto(amount)} intentado, caja {nombre_caja})."
+                )
+                return jsonify({"status": "busy", "message": "Máquina TUU ocupada"}), 429
+            self.busy_boxes.add(key)
+
+        cancel = threading.Event()
+        res, estado = {"status": "error", "message": "Error interno"}, "ERROR"
+        try:
+            # Se registra ANTES de llamar a TUU, con la clave de idempotencia como
+            # ticket: si el proceso cae a mitad, el monitor puede consultarla.
+            tx_store.registrar_intento(
+                tx_id=tx_id,
+                tipo="tuu",
+                ticket=tuu.clave_idempotencia(tx_id),
+                terminal_id=device,
+                id_sucursal=runner_id_sucursal,
+                nombre_caja=caja_tuu,
+                monto=amount,
+                client_id_sucursal=id_sucursal,
+                client_nombre_caja=nombre_caja,
+            )
+            with self.tasks_lock:
+                self.tasks[tx_id] = {
+                    "event": threading.Event(),
+                    "cancel": cancel,
+                    "type": "tuu",
+                    "result": None,
+                    "estado": "PENDIENTE",
+                    "id_sucursal": runner_id_sucursal,
+                    "nombre_caja": caja_tuu,
+                    "timestamp": time.time(),
+                    "timeout": timeout,
+                }
+            if api_key != TUU_API_KEY:
+                # La key del request solo vive en memoria (nunca en la base ni en
+                # los logs): el monitor la necesita si la venta queda INDETERMINADA.
+                self._tuu_keys[tx_id] = api_key
+
+            res = tuu.process_tuu(device, api_key, amount, tx_id, timeout,
+                                  payment_method=tuu.TUU_METODOS_PAGO[metodo], cancel=cancel)
+            estado = _estado_db(res)
+            tx = tx_store.obtener(tx_id)
+            if tx and tx.get("estado") in tx_store.ESTADOS_SIN_RESOLVER:
+                tx_store.actualizar_estado(tx_id, estado, raw_response=res)
+            elif tx:
+                estado = tx.get("estado")  # resuelta por otra vía mientras tanto
+        finally:
+            with self.tasks_lock:
+                entry = self.tasks.pop(tx_id, None)
+            if entry:
+                entry["event"].set()
+            with self.busy_lock:
+                self.busy_boxes.discard(key)
+            if estado not in tx_store.ESTADOS_SIN_RESOLVER:
+                self._tuu_keys.pop(tx_id, None)
+
+        respuesta = {
+            "success": estado == "APROBADO",
+            "transaction_id": tx_id,
+            "estado": estado,
+            "data": {
+                "status": res.get("status"),
+                "tuu_status": res.get("tuu_status"),
+                "idempotency_key": res.get("idempotency_key"),
+                "sequence_number": res.get("sequence_number"),
+                "response": res.get("response"),
+            },
+            **res,
+        }
+        if estado == "INDETERMINADA":
+            respuesta["message"] = (
+                f"{tuu.MENSAJE_INDETERMINADA} Consulte /pago/estado/{tx_id} hasta obtener APROBADO o RECHAZADO."
+            )
+        tuu_log.info(
+            f"📄 Respuesta /pago tx={tx_id} (estado={estado}): "
+            f"{json.dumps(respuesta, ensure_ascii=False, default=str)}"
+        )
+        return jsonify(respuesta), 200
+
     def resolver_transaccion(self, tx_id, estado, resuelto_por, nota=None):
         """
         Resuelve (manual o automáticamente) una transacción PENDIENTE/INDETERMINADA:
@@ -2442,9 +2675,10 @@ class APIServer:
         )
         with self.busy_lock:
             self.busy_boxes.discard((tx.get("id_sucursal"), tx.get("nombre_caja")))
+        self._tuu_keys.pop(tx_id, None)
 
         logger.info("Resolución tx=%s -> %s por %s", tx_id, estado, resuelto_por)
-        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log, "mercadopago": mercadopago_log}.get(tx.get("tipo"))
+        _tipo_log = {"getnet": getnet_log, "transbank": transbank_log, "mercadopago": mercadopago_log, "tuu": tuu_log}.get(tx.get("tipo"))
         if _tipo_log:
             _tipo_log.info(
                 f"👤 {resuelto_por or 'Un operador'} resolvió MANUALMENTE (mirando el comprobante del POS) el "

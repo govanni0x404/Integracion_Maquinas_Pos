@@ -76,3 +76,31 @@ def test_config_rechaza_saltos_de_linea(client):
 def test_config_rechaza_claves_invalidas(client):
     assert client.post("/panel/config", json={"clave minuscula": "1"}).status_code == 400
     assert client.post("/panel/config", json=["no", "es", "objeto"]).status_code == 400
+
+
+# ── Cada máquina con sus propios identificadores y credenciales ──
+
+def test_config_transbank_y_getnet_con_terminal_distinto(client):
+    r = client.post("/panel/config", json={"TRANSBANK_TERMINAL_ID": "TBK_01", "GETNET_TERMINAL_ID": "GET_01"})
+    assert r.status_code == 200
+    text = ENV_FILE.read_text(encoding="utf-8")
+    assert "TRANSBANK_TERMINAL_ID=TBK_01" in text and "GETNET_TERMINAL_ID=GET_01" in text
+
+
+@pytest.mark.parametrize("cambios", [
+    {"TRANSBANK_TERMINAL_ID": "POS01", "GETNET_TERMINAL_ID": "POS01"},
+    {"GETNET_TERMINAL_ID": "NEWLAND_N950__TEST"},             # igual al terminal MP del .env
+    {"MP_TERMINAL_ID": "SERIE_TEST"},                          # igual a la máquina TUU del .env
+    {"TUU_DEVICES": "OTRA,TBK_X", "TRANSBANK_TERMINAL_ID": "TBK_X"},
+    {"MP_TERMINAL_ID": "APP_USR-123-abc"},                     # token pegado en el campo del terminal
+    {"MP_TERMINAL_ID": "TEST-ENV-TOKEN"},                      # igual a MP_ACCESS_TOKEN del .env
+    {"TUU_DEVICES": "TEST-TUU-KEY-SECRETA"},                   # la API key en vez de la serie
+    {"TUU_API_KEY": "TEST-ENV-TOKEN"},                         # misma credencial para MP y TUU
+])
+def test_config_rechaza_identificadores_compartidos(client, cambios):
+    antes = ENV_FILE.read_text(encoding="utf-8")
+    r = client.post("/panel/config", json=cambios)
+    assert r.status_code == 400
+    error = r.get_json()["error"]
+    assert "TEST-ENV-TOKEN" not in error and "TEST-TUU-KEY-SECRETA" not in error  # nunca expone secretos
+    assert ENV_FILE.read_text(encoding="utf-8") == antes

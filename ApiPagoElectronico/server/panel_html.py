@@ -193,7 +193,7 @@ PANEL_HTML = """<!DOCTYPE html>
   <div class="card">
     <div class="card-title"><span>🏢</span> Identificación</div>
     <div class="stat">{{ nombre_caja }}</div>
-    <div class="stat-label">Sucursal {{ id_sucursal }} · Terminal {{ id_terminal }}</div>
+    <div class="stat-label">Sucursal {{ id_sucursal }} · Transbank {{ terminal_transbank }} · Getnet {{ terminal_getnet }}</div>
   </div>
 
   <div class="card">
@@ -246,7 +246,8 @@ PANEL_HTML = """<!DOCTYPE html>
       'HTTP_PORT': 'Puerto donde corre esta API. Se define en el .env, no se puede cambiar desde acá.',
       'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
       'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
-      'TERMINAL_ID': 'ID del terminal que se reporta a Transbank/Getnet. Si se deja vacío, se arma automático a partir de NOMBRE_CAJA.',
+      'TRANSBANK_TERMINAL_ID': 'Identificador de la máquina Transbank de esta caja. El sistema web debe mandar este mismo valor en terminal_id de cada venta Transbank. Debe ser distinto al de las otras máquinas.',
+      'GETNET_TERMINAL_ID': 'Identificador de la máquina Getnet de esta caja. El sistema web debe mandar este mismo valor en terminal_id de cada venta Getnet. Debe ser distinto al de las otras máquinas.',
       'USAR_POS_FISICO': 'Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
       'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
       'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
@@ -258,19 +259,15 @@ PANEL_HTML = """<!DOCTYPE html>
       'BIND_HOST': '127.0.0.1 = la API solo acepta llamadas desde esta misma PC (lo recomendado si el sistema web corre en el navegador de la caja). 0.0.0.0 = acepta llamadas de toda la red (solo si otro equipo llama a esta caja). Requiere reiniciar.',
       'AGENTES_REMOTOS': 'Habilita /register_agent, /poll, /result y /debug/queues (agentes remotos). Con false quedan deshabilitados y cualquier intento de uso queda registrado en el log técnico.',
       'LOG_RETENCION_DIAS': 'Días que se guardan los logs diarios antes de borrarlos. 0 = no borrar nunca.',
-      'MP_TERMINAL_ID': 'Terminal(es) Point de Mercado Pago de esta caja (ej. NEWLAND_N950__ABC123). Es independiente del TERMINAL_ID de Getnet/Transbank. Si hay más de uno, separarlos por coma; el sistema web elige cuál con mp_terminal_id en cada /pago.',
+      'MP_TERMINAL_ID': 'Terminal(es) Point de Mercado Pago de esta caja (ej. NEWLAND_N950__ABC123). Es independiente de los terminales de Getnet/Transbank y de las máquinas TUU. Si hay más de uno, separarlos por coma; el sistema web elige cuál con mp_terminal_id en cada /pago.',
       'ALLOW_MP_TOKEN_IN_REQUEST': '⚠️ Si está en true, cualquiera que llame a /pago puede mandar su propio access_token de Mercado Pago en el request, en vez de usar el MP_ACCESS_TOKEN configurado acá. Útil solo si varias cajas/clientes usan cuentas de MP distintas. Dejar en false si no lo necesitás.',
+      'USAR_TUU': 'Poné true si esta caja cobra con máquinas TUU (Pago remoto, PRO2/Kozen). La máquina debe estar en "Modo Integración" para recibir los cobros.',
+      'TUU_API_URL': 'URL de la API de Pago remoto de TUU. No cambiar salvo indicación de TUU: la API key se envía a esta dirección.',
+      'TUU_DEVICES': 'Número(s) de serie de las máquinas TUU permitidas en esta caja, separados por coma. El sistema web indica la máquina en el terminal_id de cada /pago. Vacío = se acepta cualquier terminal_id.',
+      'TUU_API_KEY': 'API key de TUU que se usa cuando el /pago no trae su propia key en access_token. Si cada máquina tiene su key y el sistema web la envía, puede quedar vacía.',
+      'ALLOW_TUU_KEY_IN_REQUEST': 'Si está en true, cada /pago TUU puede traer la API key de su máquina en access_token (igual que ALLOW_MP_TOKEN_IN_REQUEST). Si no la trae, se usa TUU_API_KEY. Con false siempre se usa TUU_API_KEY.',
     } %}
 
-    {% macro terminal_id_field(placeholder='') %}
-    {% if 'TERMINAL_ID' in env_vars %}
-    <div class="param-row">
-      <span class="param-key">TERMINAL_ID</span>
-      <input class="param-val sync-field" data-sync="TERMINAL_ID" name="TERMINAL_ID" value="{{ env_vars['TERMINAL_ID'] }}" title="{{ hints['TERMINAL_ID'] }}" autocomplete="off"
-             {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}>
-    </div>
-    {% endif %}
-    {% endmacro %}
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:4px;">
       Identificación de esta caja
@@ -342,7 +339,11 @@ PANEL_HTML = """<!DOCTYPE html>
     </div>
     {% endif %}
     {% endfor %}
-    {{ terminal_id_field() }}
+    <div class="param-row">
+      <span class="param-key">TRANSBANK_TERMINAL_ID</span>
+      <input class="param-val" name="TRANSBANK_TERMINAL_ID" value="{{ env_vars.get('TRANSBANK_TERMINAL_ID') or env_vars.get('TERMINAL_ID', '') }}" title="{{ hints['TRANSBANK_TERMINAL_ID'] }}" autocomplete="off"
+             placeholder="identificador de la máquina Transbank (ej. TBK_CAJA1)">
+    </div>
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
       💳 Getnet
@@ -369,7 +370,11 @@ PANEL_HTML = """<!DOCTYPE html>
       <input class="param-val" name="GETNET_MAX_ESPERA" value="{{ env_vars.get('GETNET_MAX_ESPERA', '300') }}" title="{{ hints['GETNET_MAX_ESPERA'] }}" autocomplete="off"
              placeholder="segundos (0 = sin límite)">
     </div>
-    {{ terminal_id_field() }}
+    <div class="param-row">
+      <span class="param-key">GETNET_TERMINAL_ID</span>
+      <input class="param-val" name="GETNET_TERMINAL_ID" value="{{ env_vars.get('GETNET_TERMINAL_ID') or env_vars.get('TERMINAL_ID', '') }}" title="{{ hints['GETNET_TERMINAL_ID'] }}" autocomplete="off"
+             placeholder="identificador de la máquina Getnet (ej. GETNET_CAJA1)">
+    </div>
 
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
       💳 Mercado Pago
@@ -413,11 +418,38 @@ PANEL_HTML = """<!DOCTYPE html>
              placeholder="ej: NEWLAND_N950__ABC123 (varios: separar por coma)">
     </div>
 
+    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
+      🟣 TUU (Pago remoto)
+    </div>
+    <div class="param-row">
+      <span class="param-key">USAR_TUU</span>
+      <input class="param-val" name="USAR_TUU" value="{{ env_vars.get('USAR_TUU', 'false') }}" title="{{ hints['USAR_TUU'] }}" autocomplete="off">
+    </div>
+    <div class="param-row">
+      <span class="param-key">TUU_API_URL</span>
+      <input class="param-val" name="TUU_API_URL" value="{{ env_vars.get('TUU_API_URL', 'https://integrations.payment.haulmer.com') }}" title="{{ hints['TUU_API_URL'] }}" autocomplete="off">
+    </div>
+    <div class="param-row">
+      <span class="param-key">TUU_API_KEY</span>
+      <input class="param-val" type="password" name="TUU_API_KEY" value="" title="{{ hints['TUU_API_KEY'] }}"
+             autocomplete="new-password"
+             placeholder="{% if tuu_key_configured %}configurada (dejar vacío para mantener){% else %}pegar la API key de TUU{% endif %}">
+    </div>
+    <div class="param-row">
+      <span class="param-key">TUU_DEVICES</span>
+      <input class="param-val" name="TUU_DEVICES" value="{{ env_vars.get('TUU_DEVICES', '') }}" title="{{ hints['TUU_DEVICES'] }}" autocomplete="off"
+             placeholder="número de serie de la máquina (varias: separar por coma)">
+    </div>
+    <div class="param-row">
+      <span class="param-key">ALLOW_TUU_KEY_IN_REQUEST</span>
+      <input class="param-val" name="ALLOW_TUU_KEY_IN_REQUEST" value="{{ env_vars.get('ALLOW_TUU_KEY_IN_REQUEST', 'false') }}" title="{{ hints['ALLOW_TUU_KEY_IN_REQUEST'] }}" autocomplete="off">
+    </div>
+
     {% if env_vars %}
     <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
       Otros parámetros
     </div>
-    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
+    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','TRANSBANK_TERMINAL_ID','GETNET_TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','USAR_TUU','TUU_API_URL','TUU_API_KEY','TUU_DEVICES','ALLOW_TUU_KEY_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
     {% for key, val in env_vars.items() %}
     {% if key not in known %}
     <div class="param-row">
@@ -481,6 +513,7 @@ PANEL_HTML = """<!DOCTYPE html>
     <button class="btn btn-secondary" id="tabLog-getnet" onclick="setLogTab('getnet')">💳 Getnet</button>
     <button class="btn btn-secondary" id="tabLog-transbank" onclick="setLogTab('transbank')">💳 Transbank</button>
     <button class="btn btn-secondary" id="tabLog-mercadopago" onclick="setLogTab('mercadopago')">💳 Mercado Pago</button>
+    <button class="btn btn-secondary" id="tabLog-tuu" onclick="setLogTab('tuu')">🟣 TUU</button>
   </div>
   <div class="log-box" id="logBox">Cargando...</div>
   <div class="actions">
@@ -525,7 +558,7 @@ document.getElementById('configForm').addEventListener('submit', async e => {
   e.preventDefault();
   const data = {};
   new FormData(e.target).forEach((v, k) => {
-    if (k === 'MP_ACCESS_TOKEN' && !String(v || '').trim()) return;
+    if ((k === 'MP_ACCESS_TOKEN' || k === 'TUU_API_KEY') && !String(v || '').trim()) return;
     data[k] = v;
   });
 
@@ -671,7 +704,7 @@ let currentLogTab = 'general';
 
 function setLogTab(tipo) {
   currentLogTab = tipo;
-  for (const t of ['general', 'getnet', 'transbank', 'mercadopago']) {
+  for (const t of ['general', 'getnet', 'transbank', 'mercadopago', 'tuu']) {
     const btn = document.getElementById('tabLog-' + t);
     if (btn) btn.classList.toggle('btn-primary', t === tipo);
   }

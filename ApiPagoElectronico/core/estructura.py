@@ -8,6 +8,7 @@ Orden de carpetas junto al .exe:
         logs/getnet/        log de negocio de cada integración
         logs/transbank/
         logs/mercadopago/
+        logs/tuu/
         logs/diagnostico/   auth_diag.log
         data/               pos_gateway.db (+ -wal/-shm) y pos_gateway.lock
 
@@ -20,7 +21,7 @@ import shutil
 from pathlib import Path
 
 CARPETA_LOG_GENERAL = "general"
-LOGS_NEGOCIO = ("getnet", "transbank", "mercadopago")
+LOGS_NEGOCIO = ("getnet", "transbank", "mercadopago", "tuu")
 _LOG_DIARIO = re.compile(r"^(?P<base>[A-Za-z_]+)(-\d{4}-\d{2}-\d{2})?\.log$")
 
 
