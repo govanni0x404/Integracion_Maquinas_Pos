@@ -7,522 +7,655 @@ PANEL_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ app_name }} — Panel de Control</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
+  /* Sin fuentes externas: el panel se abre en la caja aunque no haya internet. */
   :root {
-    --bg:       #0a0f1e;
-    --surface:  #111827;
-    --card:     #1a2235;
-    --border:   #2a3650;
-    --accent:   #3b82f6;
-    --accent2:  #6366f1;
-    --green:    #10b981;
-    --yellow:   #f59e0b;
-    --red:      #ef4444;
-    --text:     #e2e8f0;
-    --muted:    #64748b;
-    --radius:   14px;
+    --bg:        #0b1020;
+    --surface:   #10172a;
+    --card:      #141c31;
+    --card-2:    #18213a;
+    --border:    #243050;
+    --border-2:  #2f3c60;
+    --text:      #e6eaf3;
+    --text-2:    #b4bdd3;
+    --muted:     #8590ab;
+    --accent:    #4f7cff;
+    --accent-2:  #3b63e0;
+    --green:     #22c55e;
+    --yellow:    #f5a524;
+    --red:       #ef4444;
+    --c-transbank: #e5484d;
+    --c-getnet:    #ff7a1a;
+    --c-mp:        #00a8e8;
+    --c-tuu:       #9b6dff;
+    --radius:    12px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
 
   body {
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); }
+
+  /* ── Barra superior ── */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(11,16,32,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-inner {
+    max-width: 1240px; margin: 0 auto;
+    padding: 14px 24px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .brand-mark {
+    width: 36px; height: 36px; border-radius: 9px;
+    background: var(--accent);
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 15px; letter-spacing: -0.02em;
+  }
+  .brand h1 { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+  .brand p  { font-size: 12px; color: var(--muted); }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .clock { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ── Layout ── */
+  .layout {
+    max-width: 1240px; margin: 0 auto;
     padding: 24px;
+    display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 28px;
+    align-items: start;
   }
+  .sidenav { position: sticky; top: 88px; }
+  .sidenav-group { margin-bottom: 18px; }
+  .sidenav-title {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); padding: 0 10px; margin-bottom: 6px;
+  }
+  .sidenav a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: 8px;
+    color: var(--text-2); font-size: 13px;
+  }
+  .sidenav a:hover { background: var(--card); color: var(--text); text-decoration: none; }
+  .nav-count {
+    margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 999px;
+    background: rgba(245,165,36,0.18); color: var(--yellow);
+    font-size: 11px; font-weight: 700; text-align: center;
+  }
+  main { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
 
-  /* ── Header ── */
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 32px;
-  }
-  .header-icon {
-    width: 52px; height: 52px;
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    border-radius: 14px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 26px;
-    box-shadow: 0 8px 24px rgba(59,130,246,0.35);
-  }
-  .header h1 { font-size: 22px; font-weight: 700; }
-  .header p  { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  /* ── Indicadores ── */
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+  .dot-live { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .brand-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+  .bd-transbank { background: var(--c-transbank); }
+  .bd-getnet    { background: var(--c-getnet); }
+  .bd-mp        { background: var(--c-mp); }
+  .bd-tuu       { background: var(--c-tuu); }
 
-  /* ── Badge de estado ── */
   .badge {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 12px; border-radius: 999px;
-    font-size: 12px; font-weight: 600;
-    letter-spacing: 0.02em;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+    background: rgba(133,144,171,0.14); color: var(--text-2);
+    border: 1px solid rgba(133,144,171,0.25);
   }
-  .badge-green { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
-  .badge-yellow{ background: rgba(245,158,11,0.15);  color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); }
-  .badge-red   { background: rgba(239,68,68,0.15);   color: var(--red);    border: 1px solid rgba(239,68,68,0.3); }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor;
-         animation: pulse 2s infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .badge-green  { background: rgba(34,197,94,0.12);  color: var(--green);  border-color: rgba(34,197,94,0.3); }
+  .badge-yellow { background: rgba(245,165,36,0.12); color: var(--yellow); border-color: rgba(245,165,36,0.3); }
+  .badge-red    { background: rgba(239,68,68,0.12);  color: var(--red);    border-color: rgba(239,68,68,0.3); }
+  .badge-blue   { background: rgba(79,124,255,0.14); color: #8eaaff;       border-color: rgba(79,124,255,0.35); }
 
-  /* ── Grid principal ── */
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
-
-  /* ── Cards ── */
+  /* ── Tarjetas ── */
   .card {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 20px;
-    transition: border-color .2s;
   }
-  .card:hover { border-color: rgba(99,102,241,0.4); }
-
-  .card-title {
-    font-size: 11px; font-weight: 600; letter-spacing: .08em;
-    text-transform: uppercase; color: var(--muted);
-    margin-bottom: 14px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .card-title span { font-size: 16px; }
-
-  .stat { font-size: 28px; font-weight: 700; color: var(--text); }
-  .stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
-
-  /* ── Tabla de parámetros ── */
-  .param-row {
-    display: flex; align-items: center; gap: 12px;
-    padding: 10px 0;
+  .card-head {
+    display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+    padding: 18px 22px;
     border-bottom: 1px solid var(--border);
   }
-  .param-row:last-child { border-bottom: none; }
-  .param-key {
-    font-size: 12px; font-weight: 500; color: var(--muted);
-    min-width: 160px; font-family: 'SF Mono', monospace;
+  .card-head h2 { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 10px; }
+  .card-head p  { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .card-head > div:first-child { flex: 1 1 280px; min-width: 0; }
+  .card-head .head-right { margin-left: auto; display: flex; gap: 8px; align-items: center; min-width: 0; max-width: 100%; }
+  .card-body { padding: 20px 22px; }
+
+  /* ── Resumen ── */
+  .summary { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 16px; }
+  .tile { padding: 18px 20px; }
+  .tile-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .tile-value { font-size: 24px; font-weight: 700; margin-top: 6px; letter-spacing: -0.02em; word-break: break-word; }
+  .tile-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+  .methods { display: flex; flex-direction: column; }
+  .method {
+    display: grid; grid-template-columns: 130px auto minmax(0, 1fr); align-items: center; gap: 12px;
+    padding: 7px 0; border-bottom: 1px dashed var(--border);
   }
+  .method:last-child { border-bottom: none; padding-bottom: 0; }
+  .method:first-of-type { padding-top: 10px; }
+  .method-name { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; }
+  .method-id { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Formulario ── */
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 22px; }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field-wide { grid-column: 1 / -1; }
+  .field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .field-label span { font-size: 13px; font-weight: 600; color: var(--text); }
+  .field-label code { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .field-hint { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .field-row { display: flex; gap: 8px; }
+  .field-row .param-val { flex: 1; min-width: 0; }
+
   .param-val {
-    font-size: 13px; color: var(--text); flex: 1;
+    width: 100%;
+    font: inherit; font-size: 13.5px; color: var(--text);
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-2);
     border-radius: 8px;
-    padding: 6px 10px;
-    transition: border-color .2s;
+    padding: 8px 11px;
+    transition: border-color .15s, box-shadow .15s;
   }
-  .param-val:focus { outline: none; border-color: var(--accent); }
+  .param-val::placeholder { color: #66718e; }
+  .param-val:hover { border-color: #3a4870; }
+  .param-val:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,124,255,0.22); }
+  .param-val[readonly] { color: var(--muted); background: transparent; border-style: dashed; cursor: not-allowed; }
+  select.param-val {
+    appearance: none; -webkit-appearance: none; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+    background-size: 5px 5px; background-repeat: no-repeat;
+    padding-right: 32px;
+  }
+  select.param-val option { background: var(--surface); color: var(--text); }
+
+  .env-path {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 3px 8px; border-radius: 6px; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;
+  }
+
+  /* Barra de guardado fija al pie mientras se edita la configuración */
+  .savebar {
+    position: sticky; bottom: 16px; z-index: 40;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 16px;
+    background: rgba(20,28,49,0.96);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  }
+  .savebar-text { font-size: 12.5px; color: var(--muted); margin-right: auto; }
 
   /* ── Botones ── */
   .btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 10px 20px; border-radius: 10px;
-    font-size: 14px; font-weight: 600;
-    cursor: pointer; border: none; transition: all .2s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 8px 16px; border-radius: 8px;
+    font: inherit; font-size: 13.5px; font-weight: 600;
+    cursor: pointer; border: 1px solid transparent; transition: background .15s, border-color .15s, color .15s;
+    white-space: nowrap;
   }
-  .btn-primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent2));
-    color: white;
-    box-shadow: 0 4px 14px rgba(99,102,241,0.35);
+  .btn:hover { text-decoration: none; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-2); }
+  .btn-secondary { background: var(--card-2); color: var(--text); border-color: var(--border-2); }
+  .btn-secondary:hover:not(:disabled) { border-color: var(--accent); }
+  .btn-sm { padding: 6px 12px; font-size: 12.5px; }
+  .btn-ok:hover:not(:disabled)  { border-color: var(--green); color: var(--green); }
+  .btn-bad:hover:not(:disabled) { border-color: var(--red);   color: var(--red); }
+
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ── Pestañas de máquinas ── */
+  #sec-maquinas .card-head { align-items: center; }
+  .machine-panel[hidden] { display: none !important; }
+  .machine-desc { font-size: 12.5px; color: var(--muted); margin-bottom: -4px; }
+  .tab-state { width: 6px; height: 6px; border-radius: 50%; background: #3a4566; margin-left: 2px; }
+  .tab-state.on { background: var(--green); }
+
+  /* ── Transacciones sin confirmar ── */
+  .alert-card { border-color: rgba(245,165,36,0.45); }
+  .alert-card .card-head { background: rgba(245,165,36,0.06); border-radius: var(--radius) var(--radius) 0 0; }
+  .tx-list { display: flex; flex-direction: column; gap: 12px; }
+  .tx-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--yellow);
+    border-radius: 10px; padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 10px;
   }
-  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(99,102,241,0.45); }
-  .btn-secondary {
-    background: var(--surface); color: var(--text);
+  .tx-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tx-title { font-weight: 650; font-size: 14px; text-transform: capitalize; }
+  .tx-amount { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .tx-head .badge { margin-left: auto; }
+  .tx-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 18px; font-size: 12px; color: var(--muted); }
+  .tx-meta b { color: var(--text-2); font-weight: 500; font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+  .tx-note { font-size: 12.5px; color: var(--text-2); background: rgba(133,144,171,0.08); border-radius: 6px; padding: 6px 10px; }
+
+  /* ── Pestañas y log ── */
+  .tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; flex-wrap: wrap; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border-radius: 7px; border: none;
+    background: transparent; color: var(--muted);
+    font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--card-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border-2); }
+  .log-box {
+    font-family: var(--mono);
+    font-size: 12px; line-height: 1.65;
+    color: #aab4c8;
+    background: #080c18;
     border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    height: 340px;
+    overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
   }
-  .btn-secondary:hover { border-color: var(--accent); }
 
   /* ── Toast ── */
   #toast {
     position: fixed; bottom: 24px; right: 24px;
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px 20px;
-    font-size: 14px; font-weight: 500;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    transform: translateY(80px); opacity: 0;
-    transition: all .3s cubic-bezier(.34,1.56,.64,1);
+    max-width: 420px;
+    background: var(--card-2); border: 1px solid var(--border-2);
+    border-left-width: 4px;
+    border-radius: 10px; padding: 12px 16px;
+    font-size: 13.5px; font-weight: 500;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+    transform: translateY(20px); opacity: 0; pointer-events: none;
+    transition: transform .25s ease, opacity .25s ease;
     z-index: 9999;
   }
   #toast.show { transform: translateY(0); opacity: 1; }
-  #toast.ok  { border-color: var(--green); color: var(--green); }
-  #toast.err { border-color: var(--red);   color: var(--red); }
-
-  /* ── Log preview ── */
-  .log-box {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 11px; line-height: 1.6;
-    color: #94a3b8;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px;
-    max-height: 200px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-  }
-
-  .section-title {
-    font-size: 16px; font-weight: 600; margin-bottom: 14px;
-    display: flex; align-items: center; gap: 10px;
-  }
-
-  .actions { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+  #toast.ok  { border-left-color: var(--green); }
+  #toast.err { border-left-color: var(--red); }
 
   footer {
-    text-align: center; color: var(--muted); font-size: 11px;
-    margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border);
+    max-width: 1240px; margin: 8px auto 0; padding: 18px 24px 28px;
+    color: var(--muted); font-size: 12px;
+    display: flex; gap: 6px 18px; flex-wrap: wrap; justify-content: space-between;
+  }
+  footer code { font-size: 11.5px; }
+
+  /* ── Responsive ── */
+  @media (max-width: 1080px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .sidenav { display: none; }
+    .summary { grid-template-columns: 1fr 1fr; }
+    .summary .tile-methods { grid-column: 1 / -1; }
+  }
+  @media (max-width: 700px) {
+    .fields, .summary { grid-template-columns: minmax(0, 1fr); }
+    .method { grid-template-columns: 1fr auto; }
+    .method-id { grid-column: 1 / -1; }
+    .topbar-inner, .layout { padding-left: 14px; padding-right: 14px; }
+    .clock { display: none; }
+    .savebar-text { display: none; }
+    .savebar .btn { flex: 1; }
   }
 </style>
 </head>
 <body>
 
-<!-- Header -->
-<div class="header">
-  <div class="header-icon">💳</div>
-  <div>
-    <h1>{{ app_name }}</h1>
-    <p>Panel de Control — Puerto {{ http_port }}</p>
-  </div>
-  <div style="margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-    <span class="badge badge-green"><span class="dot"></span>Servicio activo</span>
-    <span style="font-size:11px; color:var(--muted);" id="clock"></span>
-  </div>
+{% set hints = {
+  'HTTP_PORT': 'Puerto donde corre esta API. Se define en el .env, no se puede cambiar desde acá.',
+  'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
+  'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
+  'TRANSBANK_TERMINAL_ID': 'Identificador de la máquina Transbank de esta caja. El sistema web debe mandar este mismo valor en terminal_id de cada venta Transbank. Debe ser distinto al de las otras máquinas.',
+  'GETNET_TERMINAL_ID': 'Identificador de la máquina Getnet de esta caja. El sistema web debe mandar este mismo valor en terminal_id de cada venta Getnet. Debe ser distinto al de las otras máquinas.',
+  'USAR_POS_FISICO': 'Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
+  'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
+  'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
+  'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
+  'GETNET_MAX_ESPERA': 'Segundos máximos que una venta Getnet sin confirmar (ej. cable desconectado) mantiene abierta la petición esperando que el POS vuelva. Al cumplirse responde INDETERMINADA y se sigue validando en segundo plano. 0 = sin límite. Default 300 (5 min).',
+  'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
+  'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
+  'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"), o sea que cualquier página abierta en esta PC podría intentar cobrar. Ej: https://mitienda.cl,https://otra.cl',
+  'BIND_HOST': '127.0.0.1 = la API solo acepta llamadas desde esta misma PC (lo recomendado si el sistema web corre en el navegador de la caja). 0.0.0.0 = acepta llamadas de toda la red (solo si otro equipo llama a esta caja). Requiere reiniciar.',
+  'AGENTES_REMOTOS': 'Habilita /register_agent, /poll, /result y /debug/queues (agentes remotos). Con false quedan deshabilitados y cualquier intento de uso queda registrado en el log técnico.',
+  'LOG_RETENCION_DIAS': 'Días que se guardan los logs diarios antes de borrarlos. 0 = no borrar nunca.',
+  'ALLOWED_MP': 'Cajas habilitadas para cobrar con Mercado Pago (formato sucursal:caja, separadas por coma). Vacío = todas las cajas.',
+  'MP_API_URL': 'URL de la API de Orders de Mercado Pago. Debe comenzar con https://api.mercadopago.com/ (el token se envía a esta dirección).',
+  'MP_ACCESS_TOKEN': 'Access token de la cuenta de Mercado Pago (APP_USR-...). No se muestra por seguridad: dejar vacío para mantener el actual.',
+  'MP_TERMINAL_ID': 'Terminal(es) Point de Mercado Pago de esta caja (ej. NEWLAND_N950__ABC123). Es independiente de los terminales de Getnet/Transbank y de las máquinas TUU. Si hay más de uno, separarlos por coma; el sistema web elige cuál con mp_terminal_id en cada /pago.',
+  'ALLOW_MP_TOKEN_IN_REQUEST': '⚠️ Si está en true, cualquiera que llame a /pago puede mandar su propio access_token de Mercado Pago en el request, en vez de usar el MP_ACCESS_TOKEN configurado acá. Útil solo si varias cajas/clientes usan cuentas de MP distintas. Dejar en false si no lo necesitás.',
+  'USAR_TUU': 'Poné true si esta caja cobra con máquinas TUU (Pago remoto, PRO2/Kozen). La máquina debe estar en "Modo Integración" para recibir los cobros.',
+  'TUU_API_URL': 'URL de la API de Pago remoto de TUU. No cambiar salvo indicación de TUU: la API key se envía a esta dirección.',
+  'TUU_DEVICES': 'Número(s) de serie de las máquinas TUU permitidas en esta caja, separados por coma. El sistema web indica la máquina en el terminal_id de cada /pago. Vacío = se acepta cualquier terminal_id.',
+  'TUU_API_KEY': 'API key de TUU que se usa cuando el /pago no trae su propia key en access_token. Si cada máquina tiene su key y el sistema web la envía, puede quedar vacía.',
+  'ALLOW_TUU_KEY_IN_REQUEST': 'Si está en true, cada /pago TUU puede traer la API key de su máquina en access_token (igual que ALLOW_MP_TOKEN_IN_REQUEST). Si no la trae, se usa TUU_API_KEY. Con false siempre se usa TUU_API_KEY.',
+} %}
+
+{# Campo de texto: etiqueta legible + nombre de la variable del .env + ayuda visible. #}
+{% macro field(key, label, value='', hint='', placeholder='', type='text', readonly=false, wide=false, id='', autocomplete='off') %}
+<div class="field{% if wide %} field-wide{% endif %}">
+  <label class="field-label" for="{{ id or 'f-' ~ key }}"><span>{{ label }}</span><code>{{ key }}</code></label>
+  <input class="param-val" id="{{ id or 'f-' ~ key }}" type="{{ type }}" name="{{ key }}" value="{{ value }}" autocomplete="{{ autocomplete }}"
+         {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+         {% if readonly %}readonly title="El puerto se define en el .env y no se puede editar desde el panel"{% elif hint %}title="{{ hint }}"{% endif %}>
+  {% if hint %}<p class="field-hint">{{ hint }}</p>{% endif %}
 </div>
+{% endmacro %}
 
-<!-- Stats row -->
-<div class="grid">
-
-  <div class="card">
-    <div class="card-title"><span>🏢</span> Identificación</div>
-    <div class="stat">{{ nombre_caja }}</div>
-    <div class="stat-label">Sucursal {{ id_sucursal }} · Transbank {{ terminal_transbank }} · Getnet {{ terminal_getnet }}</div>
-  </div>
-
-  <div class="card">
-    <div class="card-title"><span>🌐</span> Puerto HTTP</div>
-    <div class="stat">{{ http_port }}</div>
-    <div class="stat-label">
-      <a href="http://localhost:{{ http_port }}/status" target="_blank"
-         style="color:var(--accent); text-decoration:none;">
-        localhost:{{ http_port }}/status ↗
-      </a>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-title"><span>💻</span> Hardware POS</div>
-    <div class="stat" style="font-size:18px; margin-top:4px;">
-      {% if usar_pos == 'true' %}
-        <span class="badge badge-green" style="font-size:13px; padding:6px 14px;">Transbank ✓</span>
-      {% else %}
-        <span class="badge badge-yellow" style="font-size:13px; padding:6px 14px;">Sin POS físico</span>
-      {% endif %}
-      {% if usar_getnet == 'true' %}
-        <span class="badge badge-green" style="font-size:13px; padding:6px 14px; margin-left:4px;">Getnet ✓</span>
-      {% else %}
-        <span class="badge badge-yellow" style="font-size:13px; padding:6px 14px; margin-left:4px;">Sin Getnet</span>
-      {% endif %}
-      {% if mp_allowed == '' %}
-        <span class="badge badge-green" style="font-size:13px; padding:6px 14px; margin-left:4px;">Mercado Pago ✓</span>
-      {% elif mp_allowed %}
-        <span class="badge" style="font-size:13px; padding:6px 14px; margin-left:4px; background:rgba(99,102,241,0.15); color:#818cf8; border:1px solid rgba(99,102,241,0.3);" title="Cajas: {{ mp_allowed }}">Mercado Pago ▸ {{ mp_allowed.split(',') | length }} caja(s)</span>
-      {% else %}
-        <span class="badge badge-yellow" style="font-size:13px; padding:6px 14px; margin-left:4px;">Mercado Pago —</span>
-      {% endif %}
-    </div>
-    <div class="stat-label" style="margin-top:8px;">{{ agents_count }} agente(s) registrado(s)</div>
-  </div>
-
+{# Valores true/false: se eligen de una lista, pero se guardan igual que antes en el .env. #}
+{% macro toggle(key, label, value, hint='', id='', refresh=false) %}
+{% set on = (value | string | lower | trim) == 'true' %}
+<div class="field">
+  <label class="field-label" for="{{ id or 'f-' ~ key }}"><span>{{ label }}</span><code>{{ key }}</code></label>
+  <select class="param-val" id="{{ id or 'f-' ~ key }}" name="{{ key }}" title="{{ hint }}"{% if refresh %} oninput="refreshDetectButtons()" onchange="refreshDetectButtons()"{% endif %}>
+    <option value="true"{% if on %} selected{% endif %}>Sí (true)</option>
+    <option value="false"{% if not on %} selected{% endif %}>No (false)</option>
+  </select>
+  {% if hint %}<p class="field-hint">{{ hint }}</p>{% endif %}
 </div>
+{% endmacro %}
 
-<!-- Configuración editable -->
-<div class="card" style="margin-bottom:20px;">
-  <div class="section-title">⚙️ Configuración (.env)</div>
-  <div style="font-size:11px; color:var(--muted); margin-bottom:16px;">
-    📄 {{ env_path }}
+{% set tuu_on = (env_vars.get('USAR_TUU', 'false') | lower) == 'true' %}
+{% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','TRANSBANK_TERMINAL_ID','GETNET_TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','USAR_TUU','TUU_API_URL','TUU_API_KEY','TUU_DEVICES','ALLOW_TUU_KEY_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
+{% set extras = namespace(n=0) %}
+{% for key in env_vars %}{% if key not in known %}{% set extras.n = extras.n + 1 %}{% endif %}{% endfor %}
+
+<!-- Barra superior -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand-mark">AP</div>
+    <div class="brand">
+      <h1>{{ app_name }}</h1>
+      <p>Panel de control · {{ nombre_caja }} · puerto {{ http_port }}</p>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="clock"></span>
+      <span class="badge badge-green"><span class="dot dot-live"></span>Servicio activo</span>
+    </div>
   </div>
+</header>
 
-  <form id="configForm" autocomplete="off">
+<div class="layout">
 
-    {% set hints = {
-      'HTTP_PORT': 'Puerto donde corre esta API. Se define en el .env, no se puede cambiar desde acá.',
-      'ID_SUCURSAL': 'Identificador de la sucursal. Tiene que coincidir con el id_sucursal que manda tu sistema web en cada /pago.',
-      'NOMBRE_CAJA': 'Nombre de esta caja puntual. Por defecto usa el nombre del PC si se deja vacío.',
-      'TRANSBANK_TERMINAL_ID': 'Identificador de la máquina Transbank de esta caja. El sistema web debe mandar este mismo valor en terminal_id de cada venta Transbank. Debe ser distinto al de las otras máquinas.',
-      'GETNET_TERMINAL_ID': 'Identificador de la máquina Getnet de esta caja. El sistema web debe mandar este mismo valor en terminal_id de cada venta Getnet. Debe ser distinto al de las otras máquinas.',
-      'USAR_POS_FISICO': 'Esto es solo para Transbank. Poné true únicamente si esta caja tiene un POS Transbank físico conectado. No tiene nada que ver con Getnet.',
-      'PUERTOS_COM': 'Lista de puertos COM donde Transbank va a buscar su POS (autodetección). Tampoco aplica a Getnet.',
-      'USAR_GETNET': 'Este sí es el de Getnet: poné true si esta caja tiene un POS Getnet A920 Pro conectado.',
-      'GETNET_PORT': 'Puerto COM fijo para el POS Getnet (ej. COM3). Dejalo vacío para que se detecte automáticamente — solo forzarlo si la autodetección elige el puerto equivocado.',
-      'GETNET_MAX_ESPERA': 'Segundos máximos que una venta Getnet sin confirmar (ej. cable desconectado) mantiene abierta la petición esperando que el POS vuelva. Al cumplirse responde INDETERMINADA y se sigue validando en segundo plano. 0 = sin límite. Default 300 (5 min).',
-      'MAX_TRANSACTION_TIME': 'Segundos máximos por defecto que se espera la respuesta de una venta (Transbank o Getnet) antes de darla por vencida. Se puede pisar por venta si el sistema web manda "timeout" en el request.',
-      'TIMEOUT_SERVER': 'Timeout general (segundos) del servidor HTTP, usado como default en Mercado Pago y otras operaciones. También se puede pisar por request.',
-      'ALLOWED_ORIGINS': 'Dominios web permitidos para llamar a esta API desde el navegador (CORS). Vacío = se permite cualquier origen ("*"), o sea que cualquier página abierta en esta PC podría intentar cobrar. Ej: https://mitienda.cl,https://otra.cl',
-      'BIND_HOST': '127.0.0.1 = la API solo acepta llamadas desde esta misma PC (lo recomendado si el sistema web corre en el navegador de la caja). 0.0.0.0 = acepta llamadas de toda la red (solo si otro equipo llama a esta caja). Requiere reiniciar.',
-      'AGENTES_REMOTOS': 'Habilita /register_agent, /poll, /result y /debug/queues (agentes remotos). Con false quedan deshabilitados y cualquier intento de uso queda registrado en el log técnico.',
-      'LOG_RETENCION_DIAS': 'Días que se guardan los logs diarios antes de borrarlos. 0 = no borrar nunca.',
-      'MP_TERMINAL_ID': 'Terminal(es) Point de Mercado Pago de esta caja (ej. NEWLAND_N950__ABC123). Es independiente de los terminales de Getnet/Transbank y de las máquinas TUU. Si hay más de uno, separarlos por coma; el sistema web elige cuál con mp_terminal_id en cada /pago.',
-      'ALLOW_MP_TOKEN_IN_REQUEST': '⚠️ Si está en true, cualquiera que llame a /pago puede mandar su propio access_token de Mercado Pago en el request, en vez de usar el MP_ACCESS_TOKEN configurado acá. Útil solo si varias cajas/clientes usan cuentas de MP distintas. Dejar en false si no lo necesitás.',
-      'USAR_TUU': 'Poné true si esta caja cobra con máquinas TUU (Pago remoto, PRO2/Kozen). La máquina debe estar en "Modo Integración" para recibir los cobros.',
-      'TUU_API_URL': 'URL de la API de Pago remoto de TUU. No cambiar salvo indicación de TUU: la API key se envía a esta dirección.',
-      'TUU_DEVICES': 'Número(s) de serie de las máquinas TUU permitidas en esta caja, separados por coma. El sistema web indica la máquina en el terminal_id de cada /pago. Vacío = se acepta cualquier terminal_id.',
-      'TUU_API_KEY': 'API key de TUU que se usa cuando el /pago no trae su propia key en access_token. Si cada máquina tiene su key y el sistema web la envía, puede quedar vacía.',
-      'ALLOW_TUU_KEY_IN_REQUEST': 'Si está en true, cada /pago TUU puede traer la API key de su máquina en access_token (igual que ALLOW_MP_TOKEN_IN_REQUEST). Si no la trae, se usa TUU_API_KEY. Con false siempre se usa TUU_API_KEY.',
-    } %}
-
-
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:4px;">
-      Identificación de esta caja
+  <!-- Navegación lateral -->
+  <nav class="sidenav">
+    <div class="sidenav-group">
+      <div class="sidenav-title">Estado</div>
+      <a href="#resumen">Resumen</a>
+      <a href="#pendientesCard" id="navPendientes" style="display:none;">Sin confirmar <span class="nav-count" id="navPendientesCount">0</span></a>
+      <a href="#logs">Log reciente</a>
     </div>
-
-    {% for key in ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA'] %}
-    {% if key in env_vars %}
-    <div class="param-row">
-      <span class="param-key">{{ key }}</span>
-      {% if key == 'HTTP_PORT' %}
-        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" readonly title="El puerto se define en el .env y no se puede editar desde el panel">
-      {% else %}
-        <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
-      {% endif %}
+    <div class="sidenav-group">
+      <div class="sidenav-title">Configuración</div>
+      <a href="#sec-caja">Caja y servidor</a>
+      <a href="#sec-maquinas" onclick="showMachine('transbank')"><span class="brand-dot bd-transbank"></span>Transbank</a>
+      <a href="#sec-maquinas" onclick="showMachine('getnet')"><span class="brand-dot bd-getnet"></span>Getnet</a>
+      <a href="#sec-maquinas" onclick="showMachine('mp')"><span class="brand-dot bd-mp"></span>Mercado Pago</a>
+      <a href="#sec-maquinas" onclick="showMachine('tuu')"><span class="brand-dot bd-tuu"></span>TUU</a>
+      {% if extras.n %}<a href="#sec-otros">Otros parámetros</a>{% endif %}
+      {% if is_windows %}<a href="#sec-autostart">Inicio con Windows</a>{% endif %}
     </div>
-    {% endif %}
-    {% endfor %}
+  </nav>
 
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      ⏱️ General
-    </div>
+  <main>
 
-    {% for key in ['MAX_TRANSACTION_TIME','TIMEOUT_SERVER'] %}
-    {% if key in env_vars %}
-    <div class="param-row">
-      <span class="param-key">{{ key }}</span>
-      <input class="param-val" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
-    </div>
-    {% endif %}
-    {% endfor %}
+    <!-- Resumen -->
+    <section class="summary" id="resumen">
+      <div class="card tile">
+        <div class="tile-label">Caja</div>
+        <div class="tile-value">{{ nombre_caja }}</div>
+        <div class="tile-sub">Sucursal {{ id_sucursal }} · {{ agents_count }} agente(s) registrado(s)</div>
+      </div>
 
-    <div class="param-row">
-      <span class="param-key">ALLOWED_ORIGINS</span>
-      <input class="param-val" name="ALLOWED_ORIGINS" value="{{ env_vars.get('ALLOWED_ORIGINS', '') }}" title="{{ hints['ALLOWED_ORIGINS'] }}" autocomplete="off"
-             placeholder="⚠️ vacío = cualquier página web puede llamar a la API">
-    </div>
+      <div class="card tile">
+        <div class="tile-label">Servidor</div>
+        <div class="tile-value">:{{ http_port }}</div>
+        <div class="tile-sub"><a href="http://localhost:{{ http_port }}/status" target="_blank">localhost:{{ http_port }}/status ↗</a></div>
+      </div>
 
-    <div class="param-row">
-      <span class="param-key">BIND_HOST</span>
-      <input class="param-val" name="BIND_HOST" value="{{ env_vars.get('BIND_HOST', '127.0.0.1') }}" title="{{ hints['BIND_HOST'] }}" autocomplete="off">
-    </div>
-
-    <div class="param-row">
-      <span class="param-key">AGENTES_REMOTOS</span>
-      <input class="param-val" name="AGENTES_REMOTOS" value="{{ env_vars.get('AGENTES_REMOTOS', 'false') }}" title="{{ hints['AGENTES_REMOTOS'] }}" autocomplete="off">
-    </div>
-
-    <div class="param-row">
-      <span class="param-key">LOG_RETENCION_DIAS</span>
-      <input class="param-val" name="LOG_RETENCION_DIAS" value="{{ env_vars.get('LOG_RETENCION_DIAS', '60') }}" title="{{ hints['LOG_RETENCION_DIAS'] }}" autocomplete="off">
-    </div>
-
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      💳 Transbank
-    </div>
-
-    {% for key in ['USAR_POS_FISICO','PUERTOS_COM'] %}
-    {% if key in env_vars %}
-    <div class="param-row">
-      <span class="param-key">{{ key }}</span>
-      {% if key == 'PUERTOS_COM' %}
-        <div style="display:flex; gap:10px; flex:1; min-width:0;">
-          <input class="param-val" id="puertosComInput" name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints[key] }}" autocomplete="off" style="flex:1; min-width:0;">
-          <button type="button" id="btnDetectTransbank" class="btn btn-secondary" onclick="detectComPorts()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
+      <div class="card tile tile-methods">
+        <div class="tile-label">Medios de pago</div>
+        <div class="methods">
+          <div class="method">
+            <span class="method-name"><span class="brand-dot bd-transbank"></span>Transbank</span>
+            {% if usar_pos == 'true' %}<span class="badge badge-green">Activo</span>{% else %}<span class="badge">Sin POS físico</span>{% endif %}
+            <span class="method-id" title="Terminal · puerto">{{ terminal_transbank }}{% if usar_pos == 'true' %} · {{ pos_port or 'puerto no detectado' }}{% endif %}</span>
+          </div>
+          <div class="method">
+            <span class="method-name"><span class="brand-dot bd-getnet"></span>Getnet</span>
+            {% if usar_getnet == 'true' %}<span class="badge badge-green">Activo</span>{% else %}<span class="badge">Sin Getnet</span>{% endif %}
+            <span class="method-id">{{ terminal_getnet }}</span>
+          </div>
+          <div class="method">
+            <span class="method-name"><span class="brand-dot bd-mp"></span>Mercado Pago</span>
+            {% if mp_allowed == '' %}
+              <span class="badge badge-green">Activo</span>
+            {% elif mp_allowed %}
+              <span class="badge badge-blue" title="Cajas: {{ mp_allowed }}">{{ mp_allowed.split(',') | length }} caja(s)</span>
+            {% else %}
+              <span class="badge badge-yellow">Inactivo</span>
+            {% endif %}
+            <span class="method-id">{{ env_vars.get('MP_TERMINAL_ID') or 'sin terminal configurado' }}</span>
+          </div>
+          <div class="method">
+            <span class="method-name"><span class="brand-dot bd-tuu"></span>TUU</span>
+            {% if tuu_on %}<span class="badge badge-green">Activo</span>{% else %}<span class="badge">Inactivo</span>{% endif %}
+            <span class="method-id">{{ env_vars.get('TUU_DEVICES') or 'sin máquinas configuradas' }}</span>
+          </div>
         </div>
-      {% else %}
-        <input class="param-val" {% if key == 'USAR_POS_FISICO' %}id="usarPosInput" oninput="refreshDetectButtons()"{% endif %} name="{{ key }}" value="{{ env_vars[key] }}" title="{{ hints.get(key, '') }}" autocomplete="off">
+      </div>
+    </section>
+
+    <!-- Transacciones sin confirmar -->
+    <section class="card alert-card" id="pendientesCard" style="display:none;">
+      <div class="card-head">
+        <div>
+          <h2><span class="dot" style="color:var(--yellow)"></span>Transacciones sin confirmar</h2>
+          <p>Se enviaron al POS pero no llegó (o no se pudo confirmar) el resultado final. El cliente puede haber pagado igual:
+             revise el comprobante o la pantalla de la máquina antes de resolver. Mientras queden aquí, la caja o máquina
+             correspondiente queda bloqueada para nuevas ventas.</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="tx-list" id="pendientesBox"></div>
+      </div>
+    </section>
+
+    <!-- Configuración editable -->
+    <form id="configForm" autocomplete="off" style="display:flex; flex-direction:column; gap:20px;">
+
+      <section class="card" id="sec-caja">
+        <div class="card-head">
+          <div>
+            <h2>Caja y servidor</h2>
+            <p>Identificación de esta caja, tiempos de espera y acceso a la API.</p>
+          </div>
+          <div class="head-right"><span class="env-path" title="Archivo de configuración en uso">{{ env_path }}</span></div>
+        </div>
+        <div class="card-body fields">
+          {% if 'ID_SUCURSAL' in env_vars %}{{ field('ID_SUCURSAL', 'ID de sucursal', env_vars['ID_SUCURSAL'], hints['ID_SUCURSAL']) }}{% endif %}
+          {% if 'NOMBRE_CAJA' in env_vars %}{{ field('NOMBRE_CAJA', 'Nombre de la caja', env_vars['NOMBRE_CAJA'], hints['NOMBRE_CAJA']) }}{% endif %}
+          {% if 'HTTP_PORT' in env_vars %}{{ field('HTTP_PORT', 'Puerto HTTP', env_vars['HTTP_PORT'], hints['HTTP_PORT'], readonly=true) }}{% endif %}
+          {{ field('BIND_HOST', 'Interfaz de escucha', env_vars.get('BIND_HOST', '127.0.0.1'), hints['BIND_HOST']) }}
+          {% if 'MAX_TRANSACTION_TIME' in env_vars %}{{ field('MAX_TRANSACTION_TIME', 'Tiempo máximo por venta (s)', env_vars['MAX_TRANSACTION_TIME'], hints['MAX_TRANSACTION_TIME']) }}{% endif %}
+          {% if 'TIMEOUT_SERVER' in env_vars %}{{ field('TIMEOUT_SERVER', 'Timeout del servidor (s)', env_vars['TIMEOUT_SERVER'], hints['TIMEOUT_SERVER']) }}{% endif %}
+          {{ field('ALLOWED_ORIGINS', 'Orígenes web permitidos (CORS)', env_vars.get('ALLOWED_ORIGINS', ''), hints['ALLOWED_ORIGINS'],
+                   placeholder='⚠️ vacío = cualquier página web puede llamar a la API', wide=true) }}
+          {{ toggle('AGENTES_REMOTOS', 'Agentes remotos', env_vars.get('AGENTES_REMOTOS', 'false'), hints['AGENTES_REMOTOS']) }}
+          {{ field('LOG_RETENCION_DIAS', 'Retención de logs (días)', env_vars.get('LOG_RETENCION_DIAS', '60'), hints['LOG_RETENCION_DIAS']) }}
+        </div>
+      </section>
+
+      <section class="card" id="sec-maquinas">
+        <div class="card-head">
+          <div>
+            <h2>Máquinas de pago</h2>
+            <p>Cada máquina tiene sus propios identificadores y credenciales.</p>
+          </div>
+          <div class="head-right">
+            <div class="tabs" role="tablist">
+              <button type="button" class="tab" data-machine-tab="transbank" onclick="showMachine('transbank')"><span class="brand-dot bd-transbank"></span>Transbank<span class="tab-state{% if usar_pos == 'true' %} on{% endif %}"></span></button>
+              <button type="button" class="tab" data-machine-tab="getnet" onclick="showMachine('getnet')"><span class="brand-dot bd-getnet"></span>Getnet<span class="tab-state{% if usar_getnet == 'true' %} on{% endif %}"></span></button>
+              <button type="button" class="tab" data-machine-tab="mp" onclick="showMachine('mp')"><span class="brand-dot bd-mp"></span>Mercado Pago<span class="tab-state{% if mp_allowed == '' or mp_allowed %} on{% endif %}"></span></button>
+              <button type="button" class="tab" data-machine-tab="tuu" onclick="showMachine('tuu')"><span class="brand-dot bd-tuu"></span>TUU<span class="tab-state{% if tuu_on %} on{% endif %}"></span></button>
+            </div>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="machine-panel fields" id="sec-transbank" data-machine="transbank" hidden>
+            <p class="machine-desc field-wide">POS integrado por puerto COM.</p>
+            {% if 'USAR_POS_FISICO' in env_vars %}
+              {{ toggle('USAR_POS_FISICO', 'POS Transbank conectado', env_vars['USAR_POS_FISICO'], hints['USAR_POS_FISICO'], id='usarPosInput', refresh=true) }}
+            {% endif %}
+            {{ field('TRANSBANK_TERMINAL_ID', 'ID de terminal', env_vars.get('TRANSBANK_TERMINAL_ID') or env_vars.get('TERMINAL_ID', ''),
+                     hints['TRANSBANK_TERMINAL_ID'], placeholder='identificador de la máquina Transbank (ej. TBK_CAJA1)') }}
+            {% if 'PUERTOS_COM' in env_vars %}
+            <div class="field field-wide">
+              <label class="field-label" for="puertosComInput"><span>Puertos COM</span><code>PUERTOS_COM</code></label>
+              <div class="field-row">
+                <input class="param-val" id="puertosComInput" name="PUERTOS_COM" value="{{ env_vars['PUERTOS_COM'] }}" title="{{ hints['PUERTOS_COM'] }}" autocomplete="off">
+                <button type="button" id="btnDetectTransbank" class="btn btn-secondary" onclick="detectComPorts()">Detectar</button>
+              </div>
+              <p class="field-hint">{{ hints['PUERTOS_COM'] }}</p>
+            </div>
+            {% endif %}
+          </div>
+          <div class="machine-panel fields" id="sec-getnet" data-machine="getnet" hidden>
+            <p class="machine-desc field-wide">POS A920 Pro por cable USB (puerto COM).</p>
+            {% if 'USAR_GETNET' in env_vars %}
+              {{ toggle('USAR_GETNET', 'POS Getnet conectado', env_vars['USAR_GETNET'], hints['USAR_GETNET'], id='usarGetnetInput', refresh=true) }}
+            {% endif %}
+            {{ field('GETNET_TERMINAL_ID', 'ID de terminal', env_vars.get('GETNET_TERMINAL_ID') or env_vars.get('TERMINAL_ID', ''),
+                     hints['GETNET_TERMINAL_ID'], placeholder='identificador de la máquina Getnet (ej. GETNET_CAJA1)') }}
+            <div class="field">
+              <label class="field-label" for="getnetPortInput"><span>Puerto COM</span><code>GETNET_PORT</code></label>
+              <div class="field-row">
+                <input class="param-val" id="getnetPortInput" name="GETNET_PORT" value="{{ env_vars.get('GETNET_PORT', '') }}" title="{{ hints['GETNET_PORT'] }}" autocomplete="off"
+                       placeholder="vacío = detección automática">
+                <button type="button" id="btnDetectGetnet" class="btn btn-secondary" onclick="detectGetnetPort()">Detectar</button>
+              </div>
+              <p class="field-hint">{{ hints['GETNET_PORT'] }}</p>
+            </div>
+            {{ field('GETNET_MAX_ESPERA', 'Espera máxima sin confirmar (s)', env_vars.get('GETNET_MAX_ESPERA', '300'), hints['GETNET_MAX_ESPERA'],
+                     placeholder='segundos (0 = sin límite)') }}
+          </div>
+          <div class="machine-panel fields" id="sec-mp" data-machine="mp" hidden>
+            <p class="machine-desc field-wide">Terminales Point por la API de Orders. El token y los terminales son solo de Mercado Pago.</p>
+            {{ field('MP_TERMINAL_ID', 'Terminal(es) Point', env_vars.get('MP_TERMINAL_ID', ''), hints['MP_TERMINAL_ID'],
+                     placeholder='ej: NEWLAND_N950__ABC123 (varios: separar por coma)') }}
+            {{ field('MP_ACCESS_TOKEN', 'Access token', '', hints['MP_ACCESS_TOKEN'], type='password', autocomplete='new-password',
+                     placeholder=('configurado (dejar vacío para mantener)' if mp_token_configured else 'pegar APP_USR-...')) }}
+            {{ toggle('ALLOW_MP_TOKEN_IN_REQUEST', 'Aceptar token en la petición', env_vars.get('ALLOW_MP_TOKEN_IN_REQUEST', 'false'), hints['ALLOW_MP_TOKEN_IN_REQUEST']) }}
+            {% if 'ALLOWED_MP' in env_vars %}
+              {{ field('ALLOWED_MP', 'Cajas habilitadas', env_vars['ALLOWED_MP'], hints['ALLOWED_MP'], placeholder='vacío = todas las cajas; ej: 70:caja_10,70:caja_11') }}
+            {% else %}
+              {{ field('ALLOWED_MP', 'Cajas habilitadas', '', hints['ALLOWED_MP'], placeholder='vacío = TODAS las cajas habilitadas para MP') }}
+            {% endif %}
+            {% if 'MP_API_URL' in env_vars %}
+              {{ field('MP_API_URL', 'URL de la API', env_vars['MP_API_URL'], hints['MP_API_URL'], wide=true) }}
+            {% endif %}
+          </div>
+          <div class="machine-panel fields" id="sec-tuu" data-machine="tuu" hidden>
+            <p class="machine-desc field-wide">Máquinas PRO2/Kozen en Modo Integración. La API key y las series son solo de TUU.</p>
+            {{ toggle('USAR_TUU', 'Máquinas TUU habilitadas', env_vars.get('USAR_TUU', 'false'), hints['USAR_TUU']) }}
+            {{ field('TUU_DEVICES', 'Número(s) de serie', env_vars.get('TUU_DEVICES', ''), hints['TUU_DEVICES'],
+                     placeholder='número de serie de la máquina (varias: separar por coma)') }}
+            {{ field('TUU_API_KEY', 'API key', '', hints['TUU_API_KEY'], type='password', autocomplete='new-password',
+                     placeholder=('configurada (dejar vacío para mantener)' if tuu_key_configured else 'pegar la API key de TUU')) }}
+            {{ toggle('ALLOW_TUU_KEY_IN_REQUEST', 'Aceptar API key en la petición', env_vars.get('ALLOW_TUU_KEY_IN_REQUEST', 'false'), hints['ALLOW_TUU_KEY_IN_REQUEST']) }}
+            {{ field('TUU_API_URL', 'URL de la API', env_vars.get('TUU_API_URL', 'https://integrations.payment.haulmer.com'), hints['TUU_API_URL'], wide=true) }}
+          </div>
+        </div>
+      </section>
+
+      {% if extras.n %}
+      <section class="card" id="sec-otros">
+        <div class="card-head">
+          <div>
+            <h2>Otros parámetros</h2>
+            <p>Variables del .env que no tienen una sección propia.</p>
+          </div>
+        </div>
+        <div class="card-body fields">
+          {% for key, val in env_vars.items() %}
+          {% if key not in known %}{{ field(key, key, val) }}{% endif %}
+          {% endfor %}
+        </div>
+      </section>
       {% endif %}
-    </div>
-    {% endif %}
-    {% endfor %}
-    <div class="param-row">
-      <span class="param-key">TRANSBANK_TERMINAL_ID</span>
-      <input class="param-val" name="TRANSBANK_TERMINAL_ID" value="{{ env_vars.get('TRANSBANK_TERMINAL_ID') or env_vars.get('TERMINAL_ID', '') }}" title="{{ hints['TRANSBANK_TERMINAL_ID'] }}" autocomplete="off"
-             placeholder="identificador de la máquina Transbank (ej. TBK_CAJA1)">
-    </div>
 
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      💳 Getnet
-    </div>
-
-    {% if 'USAR_GETNET' in env_vars %}
-    <div class="param-row">
-      <span class="param-key">USAR_GETNET</span>
-      <input class="param-val" id="usarGetnetInput" oninput="refreshDetectButtons()" name="USAR_GETNET" value="{{ env_vars['USAR_GETNET'] }}" title="{{ hints['USAR_GETNET'] }}" autocomplete="off">
-    </div>
-    {% endif %}
-
-    <div class="param-row">
-      <span class="param-key">GETNET_PORT</span>
-      <div style="display:flex; gap:10px; flex:1; min-width:0;">
-        <input class="param-val" id="getnetPortInput" name="GETNET_PORT" value="{{ env_vars.get('GETNET_PORT', '') }}" title="{{ hints['GETNET_PORT'] }}" autocomplete="off"
-               placeholder="vacío = detección automática" style="flex:1; min-width:0;">
-        <button type="button" id="btnDetectGetnet" class="btn btn-secondary" onclick="detectGetnetPort()" style="padding:6px 10px; font-size:12px; border-radius:8px;">Detectar</button>
+      <div class="savebar">
+        <span class="savebar-text">Los cambios se guardan en el .env y el servicio se reinicia para aplicarlos.</span>
+        <a href="/status" target="_blank" class="btn btn-secondary">Ver status JSON</a>
+        <a href="/panel" class="btn btn-secondary">Recargar</a>
+        <button type="submit" class="btn btn-primary" id="btnGuardar">Guardar y reiniciar</button>
       </div>
-    </div>
 
-    <div class="param-row">
-      <span class="param-key">GETNET_MAX_ESPERA</span>
-      <input class="param-val" name="GETNET_MAX_ESPERA" value="{{ env_vars.get('GETNET_MAX_ESPERA', '300') }}" title="{{ hints['GETNET_MAX_ESPERA'] }}" autocomplete="off"
-             placeholder="segundos (0 = sin límite)">
-    </div>
-    <div class="param-row">
-      <span class="param-key">GETNET_TERMINAL_ID</span>
-      <input class="param-val" name="GETNET_TERMINAL_ID" value="{{ env_vars.get('GETNET_TERMINAL_ID') or env_vars.get('TERMINAL_ID', '') }}" title="{{ hints['GETNET_TERMINAL_ID'] }}" autocomplete="off"
-             placeholder="identificador de la máquina Getnet (ej. GETNET_CAJA1)">
-    </div>
+    </form>
 
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      💳 Mercado Pago
-    </div>
-
-    {% if 'ALLOWED_MP' in env_vars %}
-    <div class="param-row">
-      <span class="param-key">ALLOWED_MP</span>
-      <input class="param-val" name="ALLOWED_MP" value="{{ env_vars['ALLOWED_MP'] }}" autocomplete="off"
-             placeholder="vacío = todas las cajas; ej: 70:caja_10,70:caja_11">
-    </div>
-    {% else %}
-    <div class="param-row">
-      <span class="param-key">ALLOWED_MP</span>
-      <input class="param-val" name="ALLOWED_MP" value="" autocomplete="off"
-             placeholder="vacío = TODAS las cajas habilitadas para MP">
-    </div>
-    {% endif %}
-
-    {% if 'MP_API_URL' in env_vars %}
-    <div class="param-row">
-      <span class="param-key">MP_API_URL</span>
-      <input class="param-val" name="MP_API_URL" value="{{ env_vars['MP_API_URL'] }}" autocomplete="off">
-    </div>
-    {% endif %}
-
-    <div class="param-row">
-      <span class="param-key">MP_ACCESS_TOKEN</span>
-      <input class="param-val" type="password" name="MP_ACCESS_TOKEN" value=""
-             autocomplete="new-password"
-             placeholder="{% if mp_token_configured %}configurado (dejar vacío para mantener){% else %}pegar APP_USR-...{% endif %}">
-    </div>
-
-    <div class="param-row">
-      <span class="param-key">ALLOW_MP_TOKEN_IN_REQUEST</span>
-      <input class="param-val" name="ALLOW_MP_TOKEN_IN_REQUEST" value="{{ env_vars.get('ALLOW_MP_TOKEN_IN_REQUEST', 'false') }}" title="{{ hints['ALLOW_MP_TOKEN_IN_REQUEST'] }}" autocomplete="off">
-    </div>
-    <div class="param-row">
-      <span class="param-key">MP_TERMINAL_ID</span>
-      <input class="param-val" name="MP_TERMINAL_ID" value="{{ env_vars.get('MP_TERMINAL_ID', '') }}" title="{{ hints['MP_TERMINAL_ID'] }}" autocomplete="off"
-             placeholder="ej: NEWLAND_N950__ABC123 (varios: separar por coma)">
-    </div>
-
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      🟣 TUU (Pago remoto)
-    </div>
-    <div class="param-row">
-      <span class="param-key">USAR_TUU</span>
-      <input class="param-val" name="USAR_TUU" value="{{ env_vars.get('USAR_TUU', 'false') }}" title="{{ hints['USAR_TUU'] }}" autocomplete="off">
-    </div>
-    <div class="param-row">
-      <span class="param-key">TUU_API_URL</span>
-      <input class="param-val" name="TUU_API_URL" value="{{ env_vars.get('TUU_API_URL', 'https://integrations.payment.haulmer.com') }}" title="{{ hints['TUU_API_URL'] }}" autocomplete="off">
-    </div>
-    <div class="param-row">
-      <span class="param-key">TUU_API_KEY</span>
-      <input class="param-val" type="password" name="TUU_API_KEY" value="" title="{{ hints['TUU_API_KEY'] }}"
-             autocomplete="new-password"
-             placeholder="{% if tuu_key_configured %}configurada (dejar vacío para mantener){% else %}pegar la API key de TUU{% endif %}">
-    </div>
-    <div class="param-row">
-      <span class="param-key">TUU_DEVICES</span>
-      <input class="param-val" name="TUU_DEVICES" value="{{ env_vars.get('TUU_DEVICES', '') }}" title="{{ hints['TUU_DEVICES'] }}" autocomplete="off"
-             placeholder="número de serie de la máquina (varias: separar por coma)">
-    </div>
-    <div class="param-row">
-      <span class="param-key">ALLOW_TUU_KEY_IN_REQUEST</span>
-      <input class="param-val" name="ALLOW_TUU_KEY_IN_REQUEST" value="{{ env_vars.get('ALLOW_TUU_KEY_IN_REQUEST', 'false') }}" title="{{ hints['ALLOW_TUU_KEY_IN_REQUEST'] }}" autocomplete="off">
-    </div>
-
-    {% if env_vars %}
-    <div class="section-title" style="font-size:13px; color:var(--muted); margin-bottom:10px; margin-top:20px;">
-      Otros parámetros
-    </div>
-    {% set known = ['HTTP_PORT','ID_SUCURSAL','NOMBRE_CAJA','TERMINAL_ID','TRANSBANK_TERMINAL_ID','GETNET_TERMINAL_ID','USAR_POS_FISICO','PUERTOS_COM','USAR_GETNET','GETNET_PORT','GETNET_MAX_ESPERA','MAX_TRANSACTION_TIME','TIMEOUT_SERVER','ALLOWED_ORIGINS','API_AUTH_USER','API_AUTH_PASS','ALLOWED_MP','MP_API_URL','MP_ACCESS_TOKEN','MP_TERMINAL_ID','ALLOW_MP_TOKEN_IN_REQUEST','USAR_TUU','TUU_API_URL','TUU_API_KEY','TUU_DEVICES','ALLOW_TUU_KEY_IN_REQUEST','BIND_HOST','AGENTES_REMOTOS','LOG_RETENCION_DIAS'] %}
-    {% for key, val in env_vars.items() %}
-    {% if key not in known %}
-    <div class="param-row">
-      <span class="param-key">{{ key }}</span>
-      <input class="param-val" name="{{ key }}" value="{{ val }}" autocomplete="off">
-    </div>
-    {% endif %}
-    {% endfor %}
-    {% endif %}
-
-    <div class="actions">
-      <button type="submit" class="btn btn-primary" id="btnGuardar">💾 Guardar y reiniciar</button>
-      <a href="/panel" class="btn btn-secondary">🔄 Recargar</a>
-      <a href="/status" target="_blank" class="btn btn-secondary">📊 Ver status JSON</a>
-    </div>
-
-  </form>
-</div>
-
-{% if is_windows %}
-<div class="card" style="margin-bottom:20px;">
-  <div class="section-title">🪟 Inicio con Windows</div>
-  <div class="param-row">
-    <span class="param-key">Autostart</span>
-    {% if autostart_enabled %}
-      <div class="param-val" style="display:flex; align-items:center; gap:10px;">
-        <span class="badge badge-green">Habilitado</span>
-        <span style="color:var(--muted); font-size:12px;">Se iniciará al iniciar sesión</span>
+    {% if is_windows %}
+    <section class="card" id="sec-autostart">
+      <div class="card-head">
+        <div>
+          <h2>Inicio con Windows</h2>
+          <p>{% if autostart_enabled %}El servicio se iniciará al iniciar sesión.{% else %}El servicio no se iniciará automáticamente.{% endif %}</p>
+        </div>
+        <div class="head-right">
+          {% if autostart_enabled %}<span class="badge badge-green">Habilitado</span>{% else %}<span class="badge badge-yellow">Deshabilitado</span>{% endif %}
+        </div>
       </div>
-    {% else %}
-      <div class="param-val" style="display:flex; align-items:center; gap:10px;">
-        <span class="badge badge-yellow">Deshabilitado</span>
-        <span style="color:var(--muted); font-size:12px;">No se iniciará automáticamente</span>
+      <div class="card-body actions">
+        <button class="btn btn-secondary" type="button" id="btnAutostartOn" onclick="setAutostart(true)">Habilitar</button>
+        <button class="btn btn-secondary" type="button" id="btnAutostartOff" onclick="setAutostart(false)">Deshabilitar</button>
+        <button class="btn btn-secondary" type="button" onclick="refreshAutostart()">Actualizar</button>
       </div>
+    </section>
     {% endif %}
-  </div>
-  <div class="actions">
-    <button class="btn btn-secondary" type="button" id="btnAutostartOn" onclick="setAutostart(true)">✅ Habilitar</button>
-    <button class="btn btn-secondary" type="button" id="btnAutostartOff" onclick="setAutostart(false)">⛔ Deshabilitar</button>
-    <button class="btn btn-secondary" type="button" onclick="refreshAutostart()">🔄 Actualizar</button>
-  </div>
-</div>
-{% endif %}
 
-<!-- Transacciones sin confirmar -->
-<div class="card" id="pendientesCard" style="margin-bottom:20px; display:none;">
-  <div class="section-title">⚠️ Transacciones sin confirmar</div>
-  <div style="font-size:12px; color:var(--muted); margin-bottom:12px;">
-    Se enviaron al POS pero no llegó (o no se pudo confirmar) el resultado final.
-    El cliente puede haber pagado igual: revise el comprobante impreso en el POS antes de resolver.
-    Mientras queden aquí, la caja correspondiente queda bloqueada para nuevas ventas Getnet.
-  </div>
-  <div id="pendientesBox"></div>
-</div>
+    <!-- Log reciente -->
+    <section class="card" id="logs">
+      <div class="card-head" style="flex-wrap:wrap;">
+        <div>
+          <h2>Log reciente</h2>
+          <p>Últimas 100 líneas de hoy. Se actualiza cada 5 segundos.</p>
+        </div>
+        <div class="head-right">
+          <button class="btn btn-secondary btn-sm" onclick="loadLog()">Actualizar</button>
+        </div>
+      </div>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:14px;">
+        <div class="tabs">
+          <button class="tab" id="tabLog-general" onclick="setLogTab('general')">Técnico</button>
+          <button class="tab" id="tabLog-getnet" onclick="setLogTab('getnet')"><span class="brand-dot bd-getnet"></span>Getnet</button>
+          <button class="tab" id="tabLog-transbank" onclick="setLogTab('transbank')"><span class="brand-dot bd-transbank"></span>Transbank</button>
+          <button class="tab" id="tabLog-mercadopago" onclick="setLogTab('mercadopago')"><span class="brand-dot bd-mp"></span>Mercado Pago</button>
+          <button class="tab" id="tabLog-tuu" onclick="setLogTab('tuu')"><span class="brand-dot bd-tuu"></span>TUU</button>
+        </div>
+        <div class="log-box" id="logBox">Cargando...</div>
+      </div>
+    </section>
 
-<!-- Log preview -->
-<div class="card">
-  <div class="section-title">📋 Log reciente</div>
-  <div class="actions" style="margin-top:0; margin-bottom:12px;">
-    <button class="btn btn-secondary" id="tabLog-general" onclick="setLogTab('general')">🛠️ Técnico</button>
-    <button class="btn btn-secondary" id="tabLog-getnet" onclick="setLogTab('getnet')">💳 Getnet</button>
-    <button class="btn btn-secondary" id="tabLog-transbank" onclick="setLogTab('transbank')">💳 Transbank</button>
-    <button class="btn btn-secondary" id="tabLog-mercadopago" onclick="setLogTab('mercadopago')">💳 Mercado Pago</button>
-    <button class="btn btn-secondary" id="tabLog-tuu" onclick="setLogTab('tuu')">🟣 TUU</button>
-  </div>
-  <div class="log-box" id="logBox">Cargando...</div>
-  <div class="actions">
-    <button class="btn btn-secondary" onclick="loadLog()">🔄 Actualizar log</button>
-  </div>
+  </main>
 </div>
 
 <footer>
-  {{ app_name }} · http://localhost:{{ http_port }} · Log de hoy: {{ log_path }}
+  <span>{{ app_name }} · http://localhost:{{ http_port }}</span>
+  <span>Log de hoy: <code>{{ log_path }}</code></span>
 </footer>
 
 <div id="toast"></div>
@@ -539,19 +672,32 @@ setInterval(updateClock, 1000);
 // ── Toast ──
 function showToast(msg, ok) {
   const t = document.getElementById('toast');
-  t.textContent = ok ? '✅ ' + msg : '❌ ' + msg;
+  t.textContent = msg;
   t.className = 'show ' + (ok ? 'ok' : 'err');
   setTimeout(() => t.className = '', 3500);
 }
 
-// ── Sincronizar campos duplicados (ej. TERMINAL_ID aparece en varias
-//    secciones, pero es el mismo valor — editar cualquiera actualiza todos) ──
-document.querySelectorAll('#configForm .sync-field').forEach(inp => {
-  inp.addEventListener('input', () => {
-    document.querySelectorAll(`#configForm .sync-field[data-sync="${inp.dataset.sync}"]`)
-      .forEach(other => { if (other !== inp) other.value = inp.value; });
-  });
-});
+// ── Pestañas de máquinas ──
+// Solo cambia lo que se ve: los campos de las pestañas ocultas siguen en el
+// formulario y se guardan igual.
+function showMachine(name) {
+  if (!document.querySelector(`.machine-panel[data-machine="${name}"]`)) name = 'transbank';
+  document.querySelectorAll('.machine-panel').forEach(p => { p.hidden = p.dataset.machine !== name; });
+  document.querySelectorAll('[data-machine-tab]').forEach(t => t.classList.toggle('active', t.dataset.machineTab === name));
+  try { localStorage.setItem('panel.maquina', name); } catch (_) {}
+}
+showMachine((() => { try { return localStorage.getItem('panel.maquina'); } catch (_) { return null; } })() || 'transbank');
+
+// Si el error de guardado nombra un campo de otra pestaña, se abre esa pestaña.
+function revealField(msg) {
+  const field = [...document.querySelectorAll('#configForm [name]')]
+    .sort((a, b) => b.name.length - a.name.length)
+    .find(el => String(msg || '').includes(el.name));
+  if (!field) return;
+  const panel = field.closest('.machine-panel');
+  if (panel) showMachine(panel.dataset.machine);
+  field.focus();
+}
 
 // ── Guardar config + reiniciar ──
 document.getElementById('configForm').addEventListener('submit', async e => {
@@ -564,7 +710,7 @@ document.getElementById('configForm').addEventListener('submit', async e => {
 
   const btn = document.getElementById('btnGuardar');
   btn.disabled = true;
-  btn.textContent = '⏳ Guardando...';
+  btn.textContent = 'Guardando...';
 
   try {
     // 1. Guardar .env
@@ -576,38 +722,39 @@ document.getElementById('configForm').addEventListener('submit', async e => {
     const j = await r.json();
     if (!j.ok) {
       showToast(j.error || 'Error al guardar', false);
-      btn.disabled = false; btn.textContent = '💾 Guardar y reiniciar';
+      revealField(j.error);
+      btn.disabled = false; btn.textContent = 'Guardar y reiniciar';
       return;
     }
 
     // 2. Solicitar reinicio
     showToast('Configuración guardada. Reiniciando servicio...', true);
-    btn.textContent = '🔄 Reiniciando...';
+    btn.textContent = 'Reiniciando...';
     await fetch('/panel/restart', { method: 'POST' }).catch(() => {});
 
     // 3. Esperar que el servicio vuelva (poll /status)
     let secs = 0;
     const interval = setInterval(async () => {
       secs++;
-      btn.textContent = `🔄 Reiniciando... (${secs}s)`;
+      btn.textContent = `Reiniciando... (${secs}s)`;
       try {
         const ping = await fetch('/status', { cache: 'no-store' });
         if (ping.ok) {
           clearInterval(interval);
-          showToast('✅ Servicio reiniciado correctamente', true);
+          showToast('Servicio reiniciado correctamente', true);
           setTimeout(() => location.reload(), 1200);
         }
       } catch(_) { /* aún reiniciando */ }
       if (secs > 30) {
         clearInterval(interval);
-        btn.disabled = false; btn.textContent = '💾 Guardar y reiniciar';
+        btn.disabled = false; btn.textContent = 'Guardar y reiniciar';
         showToast('El servicio tardó más de lo esperado. Recarga manualmente.', false);
       }
     }, 1000);
 
   } catch(err) {
     showToast('Error de conexión: ' + err, false);
-    btn.disabled = false; btn.textContent = '💾 Guardar y reiniciar';
+    btn.disabled = false; btn.textContent = 'Guardar y reiniciar';
   }
 });
 
@@ -617,11 +764,19 @@ function fmtFecha(ts) {
   return new Date(ts * 1000).toLocaleString('es-CL');
 }
 
+function fmtMonto(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? '$' + n.toLocaleString('es-CL') : '$' + (v ?? '-');
+}
+
 // Todo dato que viene del servidor se escapa antes de insertarlo como HTML:
 // notas, tickets y nombres de caja pueden venir de clientes de la API.
 function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+const NOMBRE_TIPO = { transbank: 'Transbank', getnet: 'Getnet', mercadopago: 'Mercado Pago', tuu: 'TUU' };
+const DOT_TIPO = { transbank: 'bd-transbank', getnet: 'bd-getnet', mercadopago: 'bd-mp', tuu: 'bd-tuu' };
 
 async function loadPendientes() {
   try {
@@ -629,30 +784,37 @@ async function loadPendientes() {
     const j = await r.json();
     const card = document.getElementById('pendientesCard');
     const box = document.getElementById('pendientesBox');
+    const nav = document.getElementById('navPendientes');
     const items = (j.pendientes || []);
 
     if (!items.length) {
       card.style.display = 'none';
+      nav.style.display = 'none';
       return;
     }
     card.style.display = 'block';
+    nav.style.display = 'flex';
+    document.getElementById('navPendientesCount').textContent = items.length;
 
     box.innerHTML = items.map(tx => `
-      <div class="param-row" style="flex-direction:column; align-items:stretch; gap:8px; padding:12px; border:1px solid var(--border, #333); border-radius:8px; margin-bottom:10px;">
-        <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">
-          <strong>${esc(tx.tipo)} · $${esc(tx.monto ?? '-')}</strong>
-          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : ''}">${esc(tx.estado)}</span>
+      <div class="tx-item">
+        <div class="tx-head">
+          <span class="brand-dot ${DOT_TIPO[tx.tipo] || ''}"></span>
+          <span class="tx-title">${esc(NOMBRE_TIPO[tx.tipo] || tx.tipo)}</span>
+          <span class="tx-amount">${esc(fmtMonto(tx.monto))}</span>
+          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : 'badge-blue'}">${esc(tx.estado)}</span>
         </div>
-        <div style="font-size:11px; color:var(--muted);">
-          tx: ${esc(tx.tx_id)}<br>
-          ticket: ${esc(tx.ticket ?? '-')} · caja: ${esc(tx.id_sucursal)}/${esc(tx.nombre_caja)}<br>
-          creada: ${esc(fmtFecha(tx.created_at))}
-          ${tx.nota ? `<br>nota: ${esc(tx.nota)}` : ''}
+        <div class="tx-meta">
+          <span>Transacción <b>${esc(tx.tx_id)}</b></span>
+          <span>Ticket <b>${esc(tx.ticket ?? '-')}</b></span>
+          <span>Caja <b>${esc(tx.id_sucursal)}/${esc(tx.nombre_caja)}</b></span>
+          <span>Creada <b>${esc(fmtFecha(tx.created_at))}</b></span>
         </div>
-        <div class="actions" style="margin-top:0;">
-          <button class="btn btn-secondary" data-tx="${esc(tx.tx_id)}" onclick="reconciliarTx(this.dataset.tx)">🔄 Reconsultar POS</button>
-          <button class="btn btn-secondary" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'APROBADO')">✅ Marcar aprobada</button>
-          <button class="btn btn-secondary" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'RECHAZADO')">❌ Marcar rechazada</button>
+        ${tx.nota ? `<div class="tx-note">${esc(tx.nota)}</div>` : ''}
+        <div class="actions">
+          <button class="btn btn-secondary btn-sm" data-tx="${esc(tx.tx_id)}" onclick="reconciliarTx(this.dataset.tx)">Reconsultar POS</button>
+          <button class="btn btn-secondary btn-sm btn-ok" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'APROBADO')">Marcar aprobada</button>
+          <button class="btn btn-secondary btn-sm btn-bad" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'RECHAZADO')">Marcar rechazada</button>
         </div>
       </div>
     `).join('');
@@ -706,7 +868,7 @@ function setLogTab(tipo) {
   currentLogTab = tipo;
   for (const t of ['general', 'getnet', 'transbank', 'mercadopago', 'tuu']) {
     const btn = document.getElementById('tabLog-' + t);
-    if (btn) btn.classList.toggle('btn-primary', t === tipo);
+    if (btn) btn.classList.toggle('active', t === tipo);
   }
   loadLog();
 }

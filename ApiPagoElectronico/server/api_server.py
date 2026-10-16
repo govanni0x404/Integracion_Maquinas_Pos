@@ -58,6 +58,15 @@ ESPERA_CANCELACION_GETNET = 20
 # Medio de pago -> cómo se reconcilia una venta INDETERMINADA (monitor y panel).
 RESUELTO_POR_MONITOR = {"getnet": "Command 101", "mercadopago": "API Mercado Pago", "tuu": "API TUU"}
 
+def _env_en_uso():
+    """El .env que cargó config.settings al arrancar: el panel lee y guarda ese
+    mismo archivo, no otro que encuentre buscando por su cuenta."""
+    from pathlib import Path
+    from config import settings
+    ruta = (settings._dotenv_info or {}).get("path")
+    return Path(ruta) if ruta and Path(ruta).exists() else None
+
+
 def _lista(valor):
     return [x.strip() for x in str(valor or "").split(",") if x.strip()]
 
@@ -867,9 +876,9 @@ class APIServer:
             )
 
             # Buscar .env — en --onefile el .env está junto al .exe
-            env_path = None
+            env_path = str(_env_en_uso() or "") or None
             exe_dir = Path(sys.executable).parent
-            for p in [
+            for p in [] if env_path else [
                 exe_dir / ".env",                           # junto al .exe (--onefile portable)
                 exe_dir.parent / ".env",                   # un nivel arriba
                 exe_dir.parent.parent / ".env",            # dos niveles arriba
@@ -970,8 +979,8 @@ class APIServer:
                     return jsonify({"ok": False, "error": "TUU_API_URL debe comenzar con https://integrations.payment.haulmer.com"}), 400
                 data[k] = v
 
-            env_path = None
-            for p in [
+            env_path = _env_en_uso()
+            for p in [] if env_path else [
                 Path(sys.executable).parent / ".env",
                 Path(sys.executable).parent.parent.parent / ".env",
                 Path(sys.argv[0]).resolve().parent / ".env",
