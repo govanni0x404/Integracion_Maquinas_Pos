@@ -170,6 +170,8 @@ def _crear(payload, api_key, key, ctx=""):
             logger.warning("Creando cobro TUU (intento %s/%s): error de red %s", intento, TUU_REINTENTOS_CREACION, e)
             verificar = _error_de_red_ambiguo(e)
         else:
+            tuu_log.info(f"📨 TUU respondió a la creación (intento {intento}/{TUU_REINTENTOS_CREACION}): HTTP {code} — "
+                         f"{json.dumps(body, ensure_ascii=False, default=str)}")
             if code in (200, 201):
                 return "creado", code, body
             codigo = _codigo_error(body)
@@ -251,7 +253,7 @@ def _resultado_final(info, key, monto, ctx):
     if estado == "approved":
         tuu_log.info(f"✅ Cobro APROBADO — clave {key} — {ctx} — {motivo}" + (f" — {detalle}" if detalle else ""))
     elif estado == "rejected":
-        tuu_log.info(f"⛔ Cobro NO realizado — clave {key} — {ctx} — {motivo}. No se cobró: es seguro reintentar.")
+        tuu_log.info(f"⛔ Cobro NO realizado — clave {key} — {ctx} — {motivo}. Es seguro reintentar.")
     else:
         alerta = "🚨 ALERTA: " if status == "Completed" else "⚠️ "
         tuu_log.info(f"{alerta}SIN CONFIRMACIÓN — clave {key} — {ctx} — {motivo}. La máquina queda bloqueada.")
@@ -289,6 +291,9 @@ def process_tuu(device, api_key, amount, tx_id, timeout, payment_method=TUU_METO
         "cashbackAmount": TUU_CASHBACK_AMOUNT,
         "description": TUU_DESCRIPCION,
     }
+
+    # La API key va en el header X-API-Key, no en este body.
+    tuu_log.info(f"📤 Solicitud enviada a TUU (POST /RemotePayment/v2/Create): {json.dumps(payload, ensure_ascii=False)}")
 
     enviado = False
     last_info = None

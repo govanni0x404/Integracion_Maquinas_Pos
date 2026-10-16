@@ -2514,47 +2514,62 @@ class APIServer:
 
     def _pago_tuu(self, data, id_sucursal, nombre_caja, timeout):
         """/pago con type=tuu. Se procesa en el hilo de la petición, como Mercado Pago."""
+        # Lo que llegó, para el log de negocio. Nunca incluye access_token: solo
+        # se registra de dónde salió la API key, no su valor.
+        pedido = (f"caja {data.get('nombre_caja')} — máquina {data.get('terminal_id')} — monto {data.get('amount')} — "
+                  f"timeout {data.get('timeout')} — método {data.get('payment_method') or 'debito'}"
+                  + (f" — tx {data.get('tx_id')}" if data.get("tx_id") is not None else ""))
+        tuu_log.info(f"📥 Petición /pago recibida: {pedido}")
+
+        def rechazar(mensaje, http_code=400, **extra):
+            tuu_log.info(f"❌ Venta rechazada por el sistema ({pedido}): {mensaje}. No se envió nada a la máquina.")
+            return jsonify({"error": mensaje, **extra}), http_code
+
         if not USAR_TUU:
-            return jsonify({"error": "TUU no habilitado en esta máquina (USAR_TUU)"}), 503
+            return rechazar("TUU no habilitado en esta máquina (USAR_TUU)", 503)
         if not data.get("nombre_caja"):
-            return jsonify({"error": "Es necesario el nombre_caja"}), 400
-        api_key = None
+            return rechazar("Es necesario el nombre_caja")
+        api_key, origen_key = None, "la TUU_API_KEY del .env"
         if ALLOW_TUU_KEY_IN_REQUEST:
             api_key = str(data.get("access_token") or "").strip() or None
+            if api_key:
+                origen_key = "el access_token de la petición"
+        elif data.get("access_token"):
+            origen_key = "la TUU_API_KEY del .env (se ignoró el access_token de la petición: ALLOW_TUU_KEY_IN_REQUEST=false)"
         api_key = api_key or TUU_API_KEY
         if not api_key:
-            return jsonify({"error": "Falta la API key de TUU: envíela en access_token (con "
-                                     "ALLOW_TUU_KEY_IN_REQUEST=true) o configure TUU_API_KEY"}), 400
+            return rechazar("Falta la API key de TUU: envíela en access_token (con "
+                            "ALLOW_TUU_KEY_IN_REQUEST=true) o configure TUU_API_KEY")
 
         if data.get("amount") is None:
-            return jsonify({"error": "Es necesario el monto de venta (amount)"}), 400
+            return rechazar("Es necesario el monto de venta (amount)")
         if data.get("timeout") is None:
-            return jsonify({"error": "Es necesario el timeout"}), 400
+            return rechazar("Es necesario el timeout")
         try:
             timeout = max(30, min(int(data.get("timeout")), 300))
         except (ValueError, TypeError):
-            return jsonify({"error": "timeout debe ser un número válido"}), 400
+            return rechazar("timeout debe ser un número válido")
 
         amount = _monto_valido(data.get("amount"))
         if amount is None or not (tuu.TUU_MONTO_MIN <= amount <= tuu.TUU_MONTO_MAX):
-            return jsonify({"error": f"El monto debe ser un entero entre {tuu.TUU_MONTO_MIN} y {tuu.TUU_MONTO_MAX}"}), 400
+            return rechazar(f"El monto debe ser un entero entre {tuu.TUU_MONTO_MIN} y {tuu.TUU_MONTO_MAX}")
 
         metodo = str(data.get("payment_method") or "debito").strip().lower()
         if metodo not in tuu.TUU_METODOS_PAGO:
-            return jsonify({"error": "payment_method debe ser 'debito' o 'credito'"}), 400
+            return rechazar("payment_method debe ser 'debito' o 'credito'")
 
         device, device_error = self.resolver_dispositivo_tuu(data.get("terminal_id"))
         if device_error:
-            tuu_log.info(f"❌ Venta rechazada por el sistema (monto {fmt_monto(amount)}): {device_error}")
-            return jsonify({"error": device_error, "dispositivos_configurados": TUU_DISPOSITIVOS}), 400
+            return rechazar(device_error, dispositivos_configurados=TUU_DISPOSITIVOS)
 
         tx_id_input = data.get("tx_id")
         if tx_id_input is not None:
             tx_id_input = str(tx_id_input).strip()
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tx_id_input):
-                return jsonify({"error": "tx_id inválido (solo letras, números, '-' y '_', máx. 64)"}), 400
+                return rechazar("tx_id inválido (solo letras, números, '-' y '_', máx. 64)")
             if tx_store.obtener(tx_id_input):
-                return jsonify({"error": "tx_id ya fue usado en otra venta", "transaction_id": tx_id_input}), 409
+                return rechazar("tx_id ya fue usado en otra venta", 409, transaction_id=tx_id_input)
+        tuu_log.info(f"🔑 API key de TUU: se usa {origen_key}.")
         tx_id = tx_id_input or str(uuid.uuid4())
 
         # El recurso físico es la máquina: una solicitud sin resolver en ella

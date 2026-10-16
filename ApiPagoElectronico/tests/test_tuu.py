@@ -433,3 +433,24 @@ def test_api_key_nunca_aparece_en_logs_ni_respuestas(client, monkeypatch, reloj_
     for secreto in (API_KEY, KEY_REQUEST):
         assert all(secreto not in m for m in registros)
         assert all(secreto not in c for c in cuerpos)
+
+
+def test_log_de_negocio_registra_todo_el_recorrido(client, monkeypatch, reloj_rapido):
+    mensajes = []
+    monkeypatch.setattr(tuu.tuu_log, "info", lambda m, *a, **k: mensajes.append(m))
+    monkeypatch.setattr(api.tuu_log, "info", lambda m, *a, **k: mensajes.append(m))
+    monkeypatch.setattr(api, "ALLOW_TUU_KEY_IN_REQUEST", True)
+    _tuu(monkeypatch, FakeTUU([PENDING, COMPLETED]))
+
+    # Rechazo por validación: queda en el log aunque no se llame a TUU
+    client.post("/pago", json={**PAGO, "amount": 50, "access_token": KEY_REQUEST}, headers=AUTH)
+    client.post("/pago", json={**PAGO, "tx_id": "venta-log", "access_token": KEY_REQUEST}, headers=AUTH)
+    texto = "\n".join(mensajes)
+
+    assert "📥 Petición /pago recibida: caja CAJA_TEST — máquina SERIE_TEST — monto 50" in texto
+    assert "❌ Venta rechazada por el sistema" in texto and "entre 100 y 99999999" in texto
+    assert "🔑 API key de TUU: se usa el access_token de la petición" in texto
+    assert '📤 Solicitud enviada a TUU' in texto and '"tipAmount": -1' in texto and '"cashbackAmount": -1' in texto
+    assert "📨 TUU respondió a la creación (intento 1/3): HTTP 201" in texto
+    assert "✅ Cobro APROBADO" in texto and "📄 Respuesta /pago tx=venta-log (estado=APROBADO)" in texto
+    assert KEY_REQUEST not in texto and API_KEY not in texto
