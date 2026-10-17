@@ -195,7 +195,7 @@ def test_timeout_con_pago_en_curso_queda_indeterminada_y_se_reconcilia(client, m
     tx = tx_store.obtener("venta-ind")
     assert tx["estado"] == "INDETERMINADA"
     assert tx["ticket"] == "ORD_TEST"
-    assert tx["nombre_caja"] == "mp:NEWLAND_N950__TEST"
+    assert tx["nombre_caja"] == "MP:NEWLAND_N950__TEST"
     assert client.get("/pago/estado/venta-ind", headers=AUTH).get_json()["estado"] == "INDETERMINADA"
 
     # El terminal queda bloqueado: el cliente todavía puede pagar esa orden

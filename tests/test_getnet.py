@@ -778,3 +778,24 @@ def test_puerto_presente_false_si_el_ultimo_puerto_ahora_es_de_transbank(monkeyp
     monkeypatch.setattr(gm.serial.tools.list_ports, "comports",
                         lambda: [type("P", (), {"device": "COM7"})()])
     assert mod.puerto_presente() is False
+
+
+def test_pendiente_de_la_caja_se_encuentra_sin_importar_mayusculas():
+    tx_store.registrar_intento("may-1", "getnet", "1", "POS_TEST", "1", "caja_test", 1000)
+    assert tx_store.hay_pendiente_sin_resolver("1", "CAJA_TEST") == "may-1"
+    assert tx_store.hay_pendiente_sin_resolver("1", "Caja_Test") == "may-1"
+    tx_store.actualizar_estado("may-1", "RECHAZADO")
+
+
+def test_migracion_pasa_filas_antiguas_a_mayusculas():
+    conn = tx_store._get_conn()
+    conn.execute("INSERT INTO transacciones (tx_id, tipo, nombre_caja, estado, created_at) "
+                 "VALUES ('vieja-min', 'getnet', 'caja_vieja', 'INDETERMINADA', 0)")
+    conn.commit()
+    tx_store._conn = None  # simula reiniciar el servicio
+    try:
+        fila = tx_store._get_conn().execute(
+            "SELECT tipo, nombre_caja FROM transacciones WHERE tx_id = 'vieja-min'").fetchone()
+        assert tuple(fila) == ("GETNET", "CAJA_VIEJA")
+    finally:
+        tx_store.actualizar_estado("vieja-min", "RECHAZADO")

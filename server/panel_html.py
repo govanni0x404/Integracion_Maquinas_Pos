@@ -161,6 +161,7 @@ PANEL_HTML = """<!DOCTYPE html>
   .field-label code { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .field-hint { font-size: 12px; color: var(--muted); line-height: 1.45; }
   .field-row { display: flex; gap: 8px; }
+  #f-NOMBRE_CAJA { text-transform: uppercase; }
   .param-val:disabled { opacity: .7; cursor: not-allowed; }
   .check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; width: fit-content; }
   .check input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }

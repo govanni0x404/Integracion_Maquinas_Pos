@@ -228,7 +228,8 @@ AGENTES_REMOTOS = os.environ.get("AGENTES_REMOTOS", "false").lower() == "true"
 
 # Identificación
 ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
-NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname())
+# Siempre en MAYÚSCULAS (igual que el nombre_caja que llega en cada petición).
+NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname()).strip().upper()
 ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))
 # Cada máquina física tiene su propio identificador. TERMINAL_ID queda solo por
 # compatibilidad con .env anteriores: se usa si el propio de la máquina no está.

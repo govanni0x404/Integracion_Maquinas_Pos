@@ -81,7 +81,23 @@ VAR_REEMPLAZA_PID = "APIPAGO_REEMPLAZA_PID"
 TIPO_TUU_EN_REQUEST = "haulmer"
 
 
+def _mayus(valor):
+    """nombre_caja y type se reciben y se guardan siempre en MAYÚSCULAS."""
+    return valor.strip().upper() if isinstance(valor, str) else valor
+
+
+def _entrada(data):
+    """Copia del JSON/query de la petición con nombre_caja y type en mayúsculas."""
+    data = dict(data or {})
+    for campo in ("nombre_caja", "type"):
+        if campo in data:
+            data[campo] = _mayus(data[campo])
+    return data
+
+
 def _tipo_request(valor):
+    """type del request (en cualquier caso) → nombre interno de la máquina."""
+    valor = valor.strip().lower() if isinstance(valor, str) else valor
     if valor == TIPO_TUU_EN_REQUEST:
         return "tuu"
     if valor == "tuu":
@@ -1070,6 +1086,8 @@ class APIServer:
                 if not re.fullmatch(r"[A-Z][A-Z0-9_]*", k):
                     return jsonify({"ok": False, "error": f"Clave inválida: {k!r}"}), 400
                 v = "" if v is None else str(v)
+                if k == "NOMBRE_CAJA":
+                    v = v.strip().upper()
                 if "\n" in v or "\r" in v:
                     return jsonify({"ok": False, "error": f"El valor de {k} no puede tener saltos de línea"}), 400
                 if k == "MP_API_URL" and v and not v.startswith("https://api.mercadopago.com/"):
@@ -1383,7 +1401,7 @@ class APIServer:
         def http_register_agent():
             data = request.get_json(force=True, silent=True) or {}
             id_sucursal = data.get("id_sucursal")
-            nombre_caja = data.get("nombre_caja")
+            nombre_caja = _mayus(data.get("nombre_caja"))
             meta = data.get("meta", {})
 
             if not id_sucursal or not nombre_caja:
@@ -1400,7 +1418,7 @@ class APIServer:
         @require_basic_auth
         def http_poll():
             id_sucursal = request.args.get("id_sucursal")
-            nombre_caja = request.args.get("nombre_caja")
+            nombre_caja = _mayus(request.args.get("nombre_caja"))
             if not id_sucursal or not nombre_caja:
                 return jsonify({"error": "id_sucursal y nombre_caja requeridos"}), 400
 
@@ -1538,6 +1556,7 @@ class APIServer:
                 data = request.args.to_dict()
             else:
                 data = request.get_json(force=True, silent=True) or {}
+            data = _entrada(data)
             id_sucursal = str(data.get("id_sucursal"))
             nombre_caja = str(data.get("nombre_caja"))
             pos_type = _tipo_request(data.get("type"))
@@ -1950,7 +1969,7 @@ class APIServer:
                 # El recurso físico es el terminal: una orden sin confirmar en él
                 # bloquea nuevas ventas en ESE terminal (no en las cajas Getnet/Transbank).
                 runner_id_sucursal = str(ID_SUCURSAL)
-                caja_mp = f"mp:{terminal_id}"
+                caja_mp = _mayus(f"mp:{terminal_id}")
                 pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, caja_mp)
                 if pendiente:
                     logger.warning("Venta MP bloqueada: transacción previa sin resolver tx=%s", pendiente)
@@ -2092,6 +2111,7 @@ class APIServer:
                     data = request.args.to_dict()
                 else:
                     data = request.get_json(force=True, silent=True) or {}
+                data = _entrada(data)
 
                 tipo = _tipo_request(data.get("type"))
                 logger.info("[HTTP /online] método=%s tipo=%s", request.method, data.get("type"))
@@ -2191,6 +2211,7 @@ class APIServer:
                 data = request.args.to_dict()
             else:
                 data = request.get_json(force=True, silent=True) or {}
+            data = _entrada(data)
             id_sucursal = data.get("id_sucursal")
             nombre_caja = data.get("nombre_caja")
 
@@ -2201,7 +2222,7 @@ class APIServer:
                     "message": f"El id_sucursal y el nombre_caja no coinciden con la configuración de esta máquina"
                 }), 403
 
-            pos_type = data.get("type")
+            pos_type = _tipo_request(data.get("type"))
 
             logger.info("[HTTP /pago/iniciar] Petición recibida: %s", json.dumps(data, ensure_ascii=False))
 
@@ -2788,7 +2809,7 @@ class APIServer:
         # bloquea ventas nuevas. Nunca se crea una segunda solicitud con otra
         # clave: ambas podrían llegar a la máquina y cobrar dos veces.
         runner_id_sucursal = str(ID_SUCURSAL)
-        caja_tuu = f"tuu:{device}"
+        caja_tuu = _mayus(f"tuu:{device}")
         pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, caja_tuu)
         if pendiente:
             logger.warning("Venta TUU bloqueada: transacción previa sin resolver tx=%s", pendiente)

@@ -176,3 +176,8 @@ def test_panel_login_solo_local(client_sin_sesion, clave_panel):
 def test_panel_clave_no_se_guarda_desde_el_panel(client):
     assert client.post("/panel/config", json={"PANEL_PASS_HASH": "x"}).status_code in (200, 400)
     assert "PANEL_PASS_HASH" not in ENV_FILE.read_text(encoding="utf-8")
+
+
+def test_config_guarda_nombre_caja_en_mayusculas(client):
+    assert client.post("/panel/config", json={"NOMBRE_CAJA": " caja_10 "}).status_code == 200
+    assert "NOMBRE_CAJA=CAJA_10" in ENV_FILE.read_text(encoding="utf-8")

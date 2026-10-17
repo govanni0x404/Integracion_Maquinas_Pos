@@ -68,10 +68,32 @@ def _get_conn():
             _conn.commit()
         except sqlite3.OperationalError:
             pass  # la columna ya existe
+        # tipo y nombre_caja se guardan en MAYÚSCULAS; las filas de antes se pasan acá.
+        _conn.execute(
+            "UPDATE transacciones SET tipo = UPPER(tipo), nombre_caja = UPPER(nombre_caja), "
+            "client_nombre_caja = UPPER(client_nombre_caja) "
+            "WHERE tipo != UPPER(tipo) OR nombre_caja != UPPER(nombre_caja) "
+            "OR client_nombre_caja != UPPER(client_nombre_caja)"
+        )
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_estado ON transacciones(estado)")
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_caja ON transacciones(id_sucursal, nombre_caja)")
         _conn.commit()
     return _conn
+
+
+def _mayus(valor):
+    return valor.strip().upper() if isinstance(valor, str) else valor
+
+
+def _fila(row):
+    """En la base el tipo está en MAYÚSCULAS; el código lo compara en minúsculas
+    ("getnet", "tuu"...), así que se entrega así."""
+    if row is None:
+        return None
+    tx = dict(row)
+    if isinstance(tx.get("tipo"), str):
+        tx["tipo"] = tx["tipo"].lower()
+    return tx
 
 
 def registrar_intento(tx_id, tipo, ticket, terminal_id, id_sucursal, nombre_caja, monto,
@@ -86,8 +108,8 @@ def registrar_intento(tx_id, tipo, ticket, terminal_id, id_sucursal, nombre_caja
                  client_id_sucursal, client_nombre_caja, raw_response, nota, created_at, resolved_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?, NULL, NULL, ?, NULL)
             """,
-            (tx_id, tipo, ticket, terminal_id, id_sucursal, nombre_caja, monto,
-             client_id_sucursal, client_nombre_caja, time.time()),
+            (tx_id, _mayus(tipo), ticket, terminal_id, id_sucursal, _mayus(nombre_caja), monto,
+             client_id_sucursal, _mayus(client_nombre_caja), time.time()),
         )
         conn.commit()
 
@@ -121,7 +143,7 @@ def obtener(tx_id):
     with _lock:
         conn = _get_conn()
         row = conn.execute("SELECT * FROM transacciones WHERE tx_id = ?", (tx_id,)).fetchone()
-        return dict(row) if row else None
+        return _fila(row)
 
 
 def hay_pendiente_sin_resolver(id_sucursal, nombre_caja):
@@ -135,7 +157,7 @@ def hay_pendiente_sin_resolver(id_sucursal, nombre_caja):
             WHERE id_sucursal = ? AND nombre_caja = ? AND estado IN ({placeholders})
             ORDER BY created_at ASC LIMIT 1
             """,
-            (id_sucursal, nombre_caja, *ESTADOS_SIN_RESOLVER),
+            (id_sucursal, _mayus(nombre_caja), *ESTADOS_SIN_RESOLVER),
         ).fetchone()
         return row["tx_id"] if row else None
 
@@ -148,7 +170,7 @@ def listar_no_resueltas():
             f"SELECT * FROM transacciones WHERE estado IN ({placeholders}) ORDER BY created_at DESC",
             ESTADOS_SIN_RESOLVER,
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_fila(r) for r in rows]
 
 
 def operation_ids_conocidos(tipo, excluir_tx_id=None, limite=200):
@@ -178,7 +200,7 @@ def _campo_de_respuestas(tipo, campo, excluir_tx_id, limite):
             WHERE tipo = ? AND tx_id != ? AND raw_response IS NOT NULL
             ORDER BY created_at DESC LIMIT ?
             """,
-            (tipo, excluir_tx_id or "", limite),
+            (_mayus(tipo), excluir_tx_id or "", limite),
         ).fetchall()
     ids = set()
     for row in rows:

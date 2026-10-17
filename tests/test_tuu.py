@@ -125,7 +125,7 @@ def test_completed_con_monto_correcto_aprobado(client, monkeypatch, reloj_rapido
     tx = tx_store.obtener("venta-ok")
     assert tx["estado"] == "APROBADO"
     assert tx["tipo"] == "tuu"
-    assert tx["nombre_caja"] == "tuu:SERIE_TEST"
+    assert tx["nombre_caja"] == "TUU:SERIE_TEST"
     assert tx["ticket"] == tuu.clave_idempotencia("venta-ok")
 
 
@@ -337,7 +337,7 @@ def test_terminal_id_elige_la_maquina(client, monkeypatch, reloj_rapido):
     body = client.post("/pago", json={**PAGO, "terminal_id": "SERIE_B"}, headers=AUTH).get_json()
     assert body["success"] is True
     assert fake.posts()[0]["payload"]["device"] == "SERIE_B"
-    assert tx_store.obtener(body["transaction_id"])["nombre_caja"] == "tuu:SERIE_B"
+    assert tx_store.obtener(body["transaction_id"])["nombre_caja"] == "TUU:SERIE_B"
 
 
 def test_sin_tuu_devices_acepta_cualquier_terminal_id(client, monkeypatch, reloj_rapido):
@@ -460,3 +460,14 @@ def test_type_tuu_ya_no_se_acepta_en_el_request(client):
     r = client.post("/pago", json={**PAGO, "type": "tuu"}, headers=AUTH)
     assert r.status_code == 400
     assert r.get_json()["error"] == "Tipo POS no soportado"
+
+
+def test_nombre_caja_y_type_en_minusculas_se_guardan_en_mayusculas(client, monkeypatch, reloj_rapido):
+    _tuu(monkeypatch, FakeTUU([PENDING, COMPLETED]))
+    body = client.post("/pago", json={**PAGO, "type": "Haulmer", "nombre_caja": "caja_test", "tx_id": "venta-min"},
+                       headers=AUTH).get_json()
+    assert body["estado"] == "APROBADO"
+    fila = tx_store._get_conn().execute(
+        "SELECT tipo, nombre_caja, client_nombre_caja FROM transacciones WHERE tx_id = 'venta-min'").fetchone()
+    assert tuple(fila) == ("TUU", "TUU:SERIE_TEST", "CAJA_TEST")
+    assert tx_store.obtener("venta-min")["tipo"] == "tuu"  # el código lo sigue viendo igual
