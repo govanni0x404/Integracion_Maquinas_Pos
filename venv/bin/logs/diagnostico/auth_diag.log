@@ -1,0 +1,128 @@
+2026-10-16 11:19:39 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 11:19:39 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 11:19:39 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 11:19:39 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 11:19:39 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 11:19:39 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 11:19:39 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 11:19:39 [AUTH-DIAG] ========================================
+2026-10-16 11:24:54 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 11:24:54 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 11:24:54 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 11:24:54 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 11:24:54 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 11:24:54 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 11:24:54 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 11:24:54 [AUTH-DIAG] ========================================
+2026-10-16 11:25:45 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 11:25:45 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 11:25:45 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 11:25:45 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 11:25:45 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 11:25:45 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 11:25:45 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 11:25:45 [AUTH-DIAG] ========================================
+2026-10-16 11:26:17 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 11:26:17 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 11:26:17 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 11:26:17 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 11:26:17 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 11:26:17 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 11:26:17 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 11:26:17 [AUTH-DIAG] ========================================
+2026-10-16 11:27:19 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 11:27:19 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 11:27:19 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 11:27:19 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 11:27:19 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 11:27:19 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 11:27:19 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 11:27:19 [AUTH-DIAG] ========================================
+2026-10-16 11:38:43 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 11:38:43 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 11:38:43 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 11:38:43 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 11:38:43 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 11:38:43 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 11:38:43 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 11:38:43 [AUTH-DIAG] ========================================
+2026-10-16 12:28:14 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 12:28:14 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 12:28:14 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 12:28:14 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 12:28:14 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 12:28:14 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 12:28:14 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 12:28:14 [AUTH-DIAG] ========================================
+2026-10-16 12:30:32 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 12:30:32 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 12:30:32 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 12:30:32 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 12:30:32 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 12:30:32 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 12:30:32 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 12:30:32 [AUTH-DIAG] ========================================
+2026-10-16 12:36:36 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 12:36:36 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 12:36:36 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 12:36:36 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 12:36:36 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 12:36:36 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 12:36:36 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 12:36:36 [AUTH-DIAG] ========================================
+2026-10-16 12:47:35 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 12:47:35 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 12:47:35 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 12:47:35 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 12:47:35 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 12:47:35 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 12:47:35 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 12:47:35 [AUTH-DIAG] ========================================
+2026-10-16 13:20:35 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 13:20:35 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 13:20:35 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 13:20:35 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 13:20:35 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 13:20:35 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 13:20:35 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 13:20:35 [AUTH-DIAG] ========================================
+2026-10-16 13:26:19 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 13:26:19 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 13:26:19 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 13:26:19 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 13:26:19 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 13:26:19 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 13:26:19 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 13:26:19 [AUTH-DIAG] ========================================
+2026-10-16 15:12:05 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 15:12:05 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 15:12:05 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 15:12:05 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 15:12:05 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 15:12:05 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 15:12:05 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 15:12:05 [AUTH-DIAG] ========================================
+2026-10-16 16:30:43 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-16 16:30:43 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-16 16:30:43 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-16 16:30:43 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-16 16:30:43 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-16 16:30:43 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-16 16:30:43 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-16 16:30:43 [AUTH-DIAG] ========================================
+2026-10-17 14:14:35 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-17 14:14:35 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-17 14:14:35 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-17 14:14:35 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-17 14:14:35 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-17 14:14:35 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-17 14:14:35 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-17 14:14:35 [AUTH-DIAG] ========================================
+2026-10-17 14:15:44 [AUTH-DIAG] === Diagnóstico de credenciales ===
+2026-10-17 14:15:44 [AUTH-DIAG] .env cargado desde: /home/govanni/Escritorio/Integracion_Maquinas_Pos/ApiPagoElectronico/venv/bin/.env
+2026-10-17 14:15:44 [AUTH-DIAG] Método de carga .env: python-dotenv
+2026-10-17 14:15:44 [AUTH-DIAG] Claves en os.environ eliminadas: []
+2026-10-17 14:15:44 [AUTH-DIAG] API_AUTH_USER final: 'DATAMAULE'
+2026-10-17 14:15:44 [AUTH-DIAG] API_AUTH_PASS_HASH configurado: True
+2026-10-17 14:15:44 [AUTH-DIAG] API_AUTH_USER en os.environ ahora: '(vacío=correcto)'
+2026-10-17 14:15:44 [AUTH-DIAG] ========================================
