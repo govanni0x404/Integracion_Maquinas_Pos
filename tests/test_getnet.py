@@ -299,6 +299,7 @@ class FakeGetnet:
         self.venta = {"status": "indeterminada"}
         self.conectado = False
         self.ultimo = {"status": "error", "message": "POS desconectado"}
+        self.detalle = {"status": "error", "ventas": [], "message": "sin detalle"}
         self.recon_calls = []
 
     def do_sale_with_timeout(self, amount, timeout=30, ticket=None, cancel=None):
@@ -311,6 +312,7 @@ class FakeGetnet:
         self.recon_calls.append({"ticket": ticket, **kw})
         mod = GetnetModule()
         mod.get_last_receipt = lambda timeout=15: self.ultimo
+        mod.get_sales_detail = lambda: self.detalle
         return mod.reconciliar_ticket(ticket, **kw)
 
     def is_online(self):
@@ -799,3 +801,240 @@ def test_migracion_pasa_filas_antiguas_a_mayusculas():
         assert tuple(fila) == ("GETNET", "CAJA_VIEJA")
     finally:
         tx_store.actualizar_estado("vieja-min", "RECHAZADO")
+
+
+# ── Detalle de ventas (Command 105) ───────────────────────────
+
+def _venta_pos(**campos):
+    base = {"FunctionCode": 100, "ResponseCode": 0, "ResponseMessage": "Aprobado", "Amount": 2900,
+            "AuthorizationCode": "487120", "Last4Digits": 1234, "CardBrand": "MC", "CardType": "CR",
+            "OperationId": 1121, "PosMode": 1, "AccountingDate": _fecha(AHORA + 20)}
+    return {**base, **campos}
+
+
+class PuertoDetalle:
+    """Puerto serie de un POS que contesta el 105 con `respuesta`."""
+    is_open = True
+
+    def __init__(self, respuesta):
+        self.respuesta = respuesta
+        self.buf = ""
+        self.enviados = []
+
+    @property
+    def in_waiting(self):
+        return len(self.buf)
+
+    def read(self, n):
+        data, self.buf = self.buf[:n], self.buf[n:]
+        return data.encode()
+
+    def write(self, data):
+        comando = json.loads(json.loads(data)["JsonSerialized"])["Command"]
+        self.enviados.append(comando)
+        if comando == 105:
+            self.buf += _trama(**self.respuesta)
+
+    def flush(self):
+        pass
+
+
+def _detalle_con_pos(monkeypatch, respuesta):
+    mod = GetnetModule()
+    puerto = PuertoDetalle(respuesta)
+
+    def conectar():
+        mod.serial_connection = puerto
+        return True
+    monkeypatch.setattr(mod, "connect", conectar)
+    monkeypatch.setattr(mod, "disconnect", lambda: None)
+    monkeypatch.setattr(gm.time, "sleep", lambda s: None)
+    return mod.get_sales_detail(timeout=2), puerto
+
+
+def test_detalle_de_ventas_lee_la_lista_del_pos(monkeypatch):
+    ventas = [_venta_pos(AuthorizationCode=f"A{i}", Amount=1000 + i) for i in range(40)]
+    res, puerto = _detalle_con_pos(monkeypatch, {"FunctionCode": 105, "ResponseCode": 0,
+                                                 "ResponseMessage": "Aprobado", "SaleDetails": ventas})
+    assert puerto.enviados == [105]
+    assert res["status"] == "found"
+    assert [v["AuthorizationCode"] for v in res["ventas"]] == [f"A{i}" for i in range(40)]
+
+
+def test_detalle_de_ventas_sin_transacciones(monkeypatch):
+    res, _ = _detalle_con_pos(monkeypatch, {"FunctionCode": 105, "ResponseCode": 99,
+                                            "ResponseMessage": "No hay transacciones"})
+    assert res["status"] == "not_found" and res["ventas"] == []
+
+
+def test_detalle_de_ventas_con_el_puerto_ocupado_no_espera_la_venta():
+    mod = GetnetModule()
+    mod._serial_lock.acquire()
+    try:
+        res = mod.get_sales_detail(espera_puerto=0.05)
+    finally:
+        mod._serial_lock.release()
+    assert res["status"] == "ocupado"
+
+
+def _filas(ventas, registradas=None, ticket="1792851281", monto=2900):
+    return gm.clasificar_detalle_ventas(ventas, ticket, monto, AHORA, registradas or {})
+
+
+def test_clasificar_candidato_por_monto_fecha_y_origen_caja():
+    filas = _filas([
+        _venta_pos(),                                                  # la pendiente
+        _venta_pos(AuthorizationCode="251148", Amount=4160, PosMode=0),  # cobrada a mano en el POS
+        _venta_pos(AuthorizationCode="999", PosMode=0),                # mismo monto, pero a mano
+        _venta_pos(AuthorizationCode="111", AccountingDate=_fecha(AHORA - 3600)),  # anterior al envío
+        _venta_pos(AuthorizationCode="222", ResponseCode=5, ResponseMessage="Rechazada"),
+    ])
+    assert [f["candidato"] for f in filas] == [True, False, False, False, False]
+    assert filas[0]["last4"] == "1234" and filas[0]["origen"] == "caja"
+    assert filas[1]["origen"] == "manual"
+
+
+def test_clasificar_venta_ya_registrada_no_es_candidata():
+    filas = _filas([_venta_pos()], registradas={"487120": "otro-ticket"})
+    assert filas[0]["candidato"] is False and filas[0]["registrada_ticket"] == "otro-ticket"
+
+
+def test_clasificar_con_ticket_del_pos_manda_el_ticket():
+    filas = _filas([_venta_pos(Ticket="1792851281"), _venta_pos(AuthorizationCode="X", Ticket="otro")])
+    assert [f["candidato"] for f in filas] == [True, False]
+
+
+def test_tickets_por_autorizacion_desde_la_base():
+    tx_store.registrar_intento("reg-1", "getnet", "T-1", "POS_TEST", "1", "CAJA_TEST", 1000)
+    tx_store.actualizar_estado("reg-1", "APROBADO", raw_response={"status": "success",
+                                                                  "response": {"AuthorizationCode": "ABC"}})
+    assert tx_store.tickets_por_autorizacion("getnet") == {"ABC": "T-1"}
+    assert tx_store.tickets_por_autorizacion("getnet", excluir_tx_id="reg-1") == {}
+
+
+def _pendiente_getnet(tx_id, monto=2900):
+    tx_store.registrar_intento(tx_id, "getnet", "1792851281", "POS_TEST", "1", "CAJA_TEST", monto)
+    tx_store.actualizar_estado(tx_id, "INDETERMINADA")
+
+
+def test_panel_detalle_de_ventas_y_aprobar_con_el_comprobante(getnet_server):
+    srv, fake = getnet_server
+    _pendiente_getnet("pend-105")
+    fake.get_sales_detail = lambda: {"status": "found", "response": {"FunctionCode": 105},
+                                     "ventas": [_venta_pos(), _venta_pos(AuthorizationCode="251148", Amount=4160,
+                                                                         PosMode=0)]}
+    c = panel_client(srv.app)
+    j = c.post("/panel/pendientes/pend-105/detalle_ventas").get_json()
+    assert j["ok"] and j["candidatos"] == 1
+    assert [v["autorizacion"] for v in j["ventas"] if v["candidato"]] == ["487120"]
+
+    r = c.post("/panel/pendientes/pend-105/resolver", json={"estado": "APROBADO", "autorizacion": "487120"})
+    assert r.get_json()["ok"] is True
+    tx = tx_store.obtener("pend-105")
+    raw = json.loads(tx["raw_response"])
+    assert tx["estado"] == "APROBADO" and tx["resuelto_por"] == "panel"
+    assert raw["response"]["AuthorizationCode"] == "487120" and raw["response"]["Ticket"] == "1792851281"
+    assert raw["response"]["Origen"] == "detalle_ventas"
+    # La autorización queda registrada: ya no se confunde con otra venta al reconciliar.
+    assert "487120" in tx_store.codigos_autorizacion_conocidos("getnet")
+
+
+def test_panel_aprobar_con_comprobante_que_no_esta_en_el_detalle(getnet_server):
+    srv, fake = getnet_server
+    _pendiente_getnet("pend-105b")
+    c = panel_client(srv.app)
+    r = c.post("/panel/pendientes/pend-105b/resolver", json={"estado": "APROBADO", "autorizacion": "INVENTADA"})
+    assert r.status_code == 409
+    assert tx_store.obtener("pend-105b")["estado"] == "INDETERMINADA"
+    tx_store.actualizar_estado("pend-105b", "RECHAZADO")
+
+
+def test_panel_detalle_de_ventas_solo_getnet(getnet_server):
+    srv, _ = getnet_server
+    tx_store.registrar_intento("pend-tb", "transbank", "1", "POS_TEST", "1", "CAJA_TEST", 1000)
+    assert panel_client(srv.app).post("/panel/pendientes/pend-tb/detalle_ventas").status_code == 400
+    tx_store.actualizar_estado("pend-tb", "RECHAZADO")
+
+
+def test_panel_detalle_de_ventas_pos_ocupado(getnet_server):
+    srv, fake = getnet_server
+    _pendiente_getnet("pend-ocup")
+    fake.get_sales_detail = lambda: {"status": "ocupado", "ventas": [], "message": "El POS está ocupado"}
+    r = panel_client(srv.app).post("/panel/pendientes/pend-ocup/detalle_ventas")
+    assert r.status_code == 409 and r.get_json()["ok"] is False
+    tx_store.actualizar_estado("pend-ocup", "RECHAZADO")
+
+
+def test_detalle_de_ventas_comando_en_curso_no_es_lista_vacia(monkeypatch):
+    res, _ = _detalle_con_pos(monkeypatch, {"FunctionCode": 105, "ResponseCode": 96,
+                                            "ResponseMessage": "Comando en curso"})
+    assert res["status"] == "error"
+
+
+def test_clasificar_registrada_por_ticket_y_estado_aprobado():
+    filas = gm.clasificar_detalle_ventas([_venta_pos(Ticket="T-viejo", ResponseMessage="")],
+                                         "1792851281", 2900, AHORA, {}, {"T-viejo"})
+    assert filas[0]["registrada_ticket"] == "T-viejo" and filas[0]["candidato"] is False
+
+
+# ── Reconciliación con el detalle de ventas (101 no alcanza) ──
+
+ULTIMO_DE_OTRA_VENTA = {"status": "found", "response": {"FunctionCode": 101, "ResponseCode": 0, "Amount": 100,
+                                                        "AuthorizationCode": "E2RIGZ", "OperationId": 0,
+                                                        "AccountingDate": _fecha(AHORA - 7 * 86400)}}
+
+
+def _recon_con_detalle(getnet, monkeypatch, detalle, ticket="1792869773", monto=100):
+    _ultimo(getnet, monkeypatch, ULTIMO_DE_OTRA_VENTA)
+    llamadas = []
+
+    def detalle_fake():
+        llamadas.append(1)
+        return detalle
+    monkeypatch.setattr(getnet, "get_sales_detail", detalle_fake)
+    return getnet.reconciliar_ticket(ticket, monto, sent_at=AHORA, known_auth_codes={"E2RIGZ"}), llamadas
+
+
+def test_recon_cancelada_en_la_maquina_se_resuelve_al_instante_por_detalle(getnet, monkeypatch):
+    # Caso real 2026-10-24: se cortó el cable, se canceló en la máquina y se reconectó.
+    detalle = {"status": "found", "ventas": [_venta_pos(Ticket="1792251947", Amount=100,
+                                                        AccountingDate=_fecha(AHORA - 7 * 86400))]}
+    res, _ = _recon_con_detalle(getnet, monkeypatch, detalle)
+    assert res["status"] == "rechazado"
+
+
+def test_recon_por_detalle_aprobada_aunque_otra_venta_la_tape(getnet, monkeypatch):
+    detalle = {"status": "found", "ventas": [_venta_pos(Ticket="1792869773", Amount=100, AuthorizationCode="NUEVA"),
+                                             _venta_pos(Ticket="1792251947", Amount=100)]}
+    res, _ = _recon_con_detalle(getnet, monkeypatch, detalle)
+    assert res["status"] == "aprobado"
+    assert res["response"]["AuthorizationCode"] == "NUEVA" and res["response"]["Origen"] == "detalle_ventas"
+
+
+def test_recon_por_detalle_monto_distinto_va_al_panel(getnet, monkeypatch):
+    detalle = {"status": "found", "ventas": [_venta_pos(Ticket="1792869773", Amount=999)]}
+    res, _ = _recon_con_detalle(getnet, monkeypatch, detalle)
+    assert res["status"] == "no_resuelto"
+
+
+def test_recon_por_detalle_sin_tickets_no_concluye(getnet, monkeypatch):
+    res, _ = _recon_con_detalle(getnet, monkeypatch, {"status": "found", "ventas": [_venta_pos()]})
+    assert res["status"] == "no_resuelto"
+
+
+def test_recon_por_detalle_pos_sin_respuesta_no_concluye(getnet, monkeypatch):
+    res, _ = _recon_con_detalle(getnet, monkeypatch, {"status": "error", "ventas": [], "message": "x"})
+    assert res["status"] == "no_resuelto"
+
+
+def test_recon_por_detalle_sin_ventas_en_memoria(getnet, monkeypatch):
+    res, _ = _recon_con_detalle(getnet, monkeypatch, {"status": "not_found", "ventas": []})
+    assert res["status"] == "rechazado"
+
+
+def test_recon_sin_conexion_no_pide_el_detalle(getnet, monkeypatch):
+    _ultimo(getnet, monkeypatch, {"status": "error", "message": "sin puerto"})
+    llamadas = []
+    monkeypatch.setattr(getnet, "get_sales_detail", lambda: llamadas.append(1))
+    assert getnet.reconciliar_ticket("1", 1000, sent_at=AHORA)["status"] == "no_resuelto"
+    assert llamadas == []

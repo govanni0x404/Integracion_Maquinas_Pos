@@ -47,6 +47,7 @@ from core.puertos_com import vincular as vincular_puertos
 from core.http_util import http_json as _http_json, error_de_red_ambiguo as _error_de_red_ambiguo
 from core.business_logging import getnet_log, transbank_log, mercadopago_log, tuu_log, fmt_monto
 from pos import tuu_module as tuu
+from pos import getnet_module as getnet_mod
 
 
 logger = logging.getLogger(APP_NAME)
@@ -604,6 +605,9 @@ class APIServer:
         self._esperando_getnet = set()
         # tx_id -> API key de TUU recibida en el request (solo en memoria, para el monitor).
         self._tuu_keys = {}
+        # tx_id -> filas del último detalle de ventas (Command 105) mostrado en el
+        # panel. "Aprobar con este comprobante" toma los datos de acá, no del navegador.
+        self._detalle_ventas = {}
         # tx_id cancelados mientras esperaban en la cola (protegido por tasks_lock).
         # Aparte de self.tasks porque /pago borra su tarea apenas responde, antes de
         # que el worker la saque de la cola.
@@ -1208,15 +1212,62 @@ class APIServer:
             logger.info("Reconciliación manual (panel) tx=%s -> %s", tx_id, nuevo_estado)
             return jsonify({"ok": True, "estado": nuevo_estado, "detalle": recon})
 
+        @app.route("/panel/pendientes/<tx_id>/detalle_ventas", methods=["POST"])
+        def panel_pendientes_detalle_ventas(tx_id):
+            """Detalle de ventas del POS Getnet (Command 105) para revisar una venta pendiente,
+            con las que podrían ser ella marcadas como candidatas."""
+            tx = tx_store.obtener(tx_id)
+            if not tx:
+                return jsonify({"ok": False, "error": "Transacción no encontrada"}), 404
+            if tx.get("tipo") != "getnet" or not self.getnet:
+                return jsonify({"ok": False, "error": "El detalle de ventas solo está disponible para Getnet"}), 400
+
+            getnet_log.info(f"👤 Un operador pidió desde el panel el detalle de ventas del POS (Command 105) "
+                            f"para revisar el ticket {tx.get('ticket')} (tx {tx_id}).")
+            res = self.getnet.get_sales_detail()
+            if res["status"] in ("error", "ocupado"):
+                getnet_log.info(f"↪️ No se pudo obtener el detalle de ventas: {res.get('message')}")
+                return jsonify({"ok": False, "error": res.get("message")}), 409 if res["status"] == "ocupado" else 502
+
+            filas = getnet_mod.clasificar_detalle_ventas(
+                res["ventas"], tx.get("ticket"), tx.get("monto"), tx.get("created_at"),
+                tx_store.tickets_por_autorizacion("getnet", excluir_tx_id=tx_id),
+                tx_store.tickets_registrados("getnet", excluir_tx_id=tx_id),
+            )
+            self._detalle_ventas[tx_id] = {"filas": filas, "ventas": res["ventas"]}
+            candidatos = sum(1 for f in filas if f["candidato"])
+            getnet_log.info(
+                f"📋 Detalle de ventas del POS: {len(filas)} venta(s) en memoria, {candidatos} candidata(s) para el "
+                f"ticket {tx.get('ticket')} (monto {fmt_monto(tx.get('monto'))}). "
+                f"JSON: {json.dumps(res.get('response'), ensure_ascii=False, default=str)}"
+            )
+            return jsonify({"ok": True, "ventas": filas, "candidatos": candidatos,
+                            "monto": tx.get("monto"), "enviada": tx.get("created_at")})
+
         @app.route("/panel/pendientes/<tx_id>/resolver", methods=["POST"])
         def panel_pendientes_resolver(tx_id):
-            """Resolución manual: el operador confirma el resultado mirando el comprobante impreso en el POS."""
+            """Resolución manual: el operador confirma el resultado mirando el comprobante impreso en el POS.
+            Con "autorizacion" se aprueba con ese comprobante del último detalle de ventas consultado."""
             body = request.get_json(silent=True) or {}
+            comprobante = None
+            autorizacion = str(body.get("autorizacion") or "").strip()
+            if autorizacion:
+                if body.get("estado") != "APROBADO":
+                    return jsonify({"ok": False, "error": "Solo se puede aprobar con un comprobante"}), 400
+                detalle = self._detalle_ventas.get(tx_id) or {}
+                venta = next((v for v, f in zip(detalle.get("ventas", []), detalle.get("filas", []))
+                              if f["autorizacion"] == autorizacion and not f["registrada_ticket"]), None)
+                if venta is None:
+                    return jsonify({"ok": False, "error": "Ese comprobante no está en el último detalle consultado "
+                                                          "o ya pertenece a otra venta. Vuelva a consultar el detalle."}), 409
+                tx = tx_store.obtener(tx_id) or {}
+                comprobante = getnet_mod.normalizar_comprobante(venta, tx.get("ticket"), "detalle_ventas")
             ok, err, code = self.resolver_transaccion(
-                tx_id, body.get("estado"), resuelto_por="panel", nota=body.get("nota")
+                tx_id, body.get("estado"), resuelto_por="panel", nota=body.get("nota"), comprobante=comprobante
             )
             if not ok:
                 return jsonify({"ok": False, "error": err}), code
+            self._detalle_ventas.pop(tx_id, None)
             return jsonify({"ok": True, "estado": body.get("estado")})
 
         @app.route('/pago/resolver/<tx_id>', methods=['POST'])
@@ -2620,7 +2671,7 @@ class APIServer:
             tx_id, cancel, "transbank", intervalo, espera_tras_intento, reescaneo,
             TRANSBANK_MAX_ESPERA if max_espera is None else max_espera)
 
-    def esperar_resolucion_getnet(self, tx_id, cancel, intervalo=5, espera_tras_intento=15, reescaneo=30,
+    def esperar_resolucion_getnet(self, tx_id, cancel, intervalo=2, espera_tras_intento=5, reescaneo=30,
                                   max_espera=None):
         """Ver _esperar_resolucion."""
         return self._esperar_resolucion(
@@ -2908,12 +2959,16 @@ class APIServer:
         )
         return jsonify(respuesta), 200
 
-    def resolver_transaccion(self, tx_id, estado, resuelto_por, nota=None):
+    def resolver_transaccion(self, tx_id, estado, resuelto_por, nota=None, comprobante=None):
         """
         Resuelve (manual o automáticamente) una transacción PENDIENTE/INDETERMINADA:
         actualiza el registro persistente con quién y cuándo, y recién ahí libera la
         caja. Usado tanto por el panel (humano mirando el comprobante del POS) como
         por /pago/resolver/<tx_id> (API autenticada) y el monitor de reconciliación.
+
+        comprobante: datos de la venta en el POS (detalle de ventas) con que se
+        aprobó; queda en raw_response["response"] igual que una venta normal, así
+        su autorización ya no se confunde con la de otra venta al reconciliar.
 
         Returns: (ok: bool, error_message: str|None, http_code: int)
         """
@@ -2923,10 +2978,16 @@ class APIServer:
         if estado not in ("APROBADO", "RECHAZADO"):
             return False, "estado debe ser APROBADO o RECHAZADO", 400
 
-        nota_final = nota or f"Resuelto manualmente por {resuelto_por or 'operador desconocido'}"
+        nota_final = nota or (
+            f"Aprobada con el comprobante del POS (autorización {comprobante.get('AuthorizationCode')})"
+            if comprobante else f"Resuelto manualmente por {resuelto_por or 'operador desconocido'}"
+        )
+        raw = {"manual": True, "nota": nota_final, "resuelto_por": resuelto_por}
+        if comprobante:
+            raw.update(status="success", response=comprobante)
         tx_store.actualizar_estado(
             tx_id, estado,
-            raw_response={"manual": True, "nota": nota_final, "resuelto_por": resuelto_por},
+            raw_response=raw,
             nota=nota_final,
             resuelto_por=resuelto_por,
         )

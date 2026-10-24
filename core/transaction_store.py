@@ -191,6 +191,47 @@ def codigos_autorizacion_conocidos(tipo, excluir_tx_id=None, limite=200):
     return _campo_de_respuestas(tipo, "authorizationcode", excluir_tx_id, limite)
 
 
+def tickets_por_autorizacion(tipo, excluir_tx_id=None, limite=500):
+    """
+    {AuthorizationCode: ticket} de las ventas ya registradas de este tipo. Sirve
+    para marcar en el detalle de ventas del POS cuáles ya están en el sistema.
+    """
+    with _lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT ticket, raw_response FROM transacciones
+            WHERE tipo = ? AND tx_id != ? AND raw_response IS NOT NULL
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (_mayus(tipo), excluir_tx_id or "", limite),
+        ).fetchall()
+    out = {}
+    for row in rows:
+        try:
+            raw = json.loads(row["raw_response"])
+        except (TypeError, ValueError):
+            continue
+        resp = raw.get("response") if isinstance(raw, dict) else None
+        if not isinstance(resp, dict):
+            continue
+        for k, v in resp.items():
+            if k.lower() == "authorizationcode" and v not in (None, "", 0, "0") and str(v).strip():
+                out.setdefault(str(v).strip(), row["ticket"])
+    return out
+
+
+def tickets_registrados(tipo, excluir_tx_id=None):
+    """Tickets de todas las transacciones de este tipo que hay en la base."""
+    with _lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            "SELECT ticket FROM transacciones WHERE tipo = ? AND tx_id != ? AND ticket IS NOT NULL",
+            (_mayus(tipo), excluir_tx_id or ""),
+        ).fetchall()
+    return {str(r["ticket"]).strip() for r in rows if str(r["ticket"]).strip()}
+
+
 def _campo_de_respuestas(tipo, campo, excluir_tx_id, limite):
     with _lock:
         conn = _get_conn()

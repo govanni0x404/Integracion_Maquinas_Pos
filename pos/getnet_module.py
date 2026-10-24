@@ -93,6 +93,58 @@ def _es_comprobante_de_la_venta(response, ticket, amount, sent_at, known_operati
     return es_nuestro, motivo
 
 
+def clasificar_detalle_ventas(ventas, ticket, amount, sent_at, registradas, tickets_sistema=()):
+    """
+    Arma las filas del detalle de ventas (Command 105) para revisar una venta
+    pendiente. `registradas` = {AuthorizationCode: ticket} y `tickets_sistema` =
+    tickets de las ventas que ya están en el sistema.
+
+    Una venta del POS es "candidato" a ser la pendiente si: está aprobada, tiene
+    el mismo monto, se hizo en modo integrado (PosMode 1: la mandó una caja, no
+    se cobró a mano en la máquina), no pertenece a otra venta registrada y, si el
+    POS manda Ticket, es el nuestro; si no lo manda, su fecha es posterior al
+    envío (con la tolerancia de reloj).
+    """
+    filas = []
+    for v in ventas:
+        autorizacion = str(_rget(v, "AuthorizationCode", "") or "").strip()
+        pos_ticket = str(_rget(v, "Ticket", "") or "").strip()
+        fecha_ts = _parse_fecha_pos(_rget(v, "AccountingDate"))
+        pos_mode = _rget(v, "PosMode")
+        registrada = registradas.get(autorizacion) if autorizacion else None
+        if pos_ticket and not registrada and pos_ticket != str(ticket).strip() and pos_ticket in tickets_sistema:
+            registrada = pos_ticket
+
+        candidato = (
+            _rget(v, "ResponseCode") in (0, "0")
+            and amount is not None and _mismo_monto(_rget(v, "Amount"), amount)
+            and str(pos_mode) != "0"
+            and not registrada
+        )
+        if candidato and pos_ticket:
+            candidato = pos_ticket == str(ticket).strip()
+        elif candidato:
+            candidato = fecha_ts is not None and sent_at is not None and fecha_ts >= sent_at - RECON_TOLERANCIA_RELOJ_SEGUNDOS
+
+        last4 = _rget(v, "Last4Digits")
+        filas.append({
+            "fecha": _rget(v, "AccountingDate"),
+            "monto": _rget(v, "Amount"),
+            "autorizacion": autorizacion or None,
+            "last4": str(last4).zfill(4) if last4 not in (None, "") else None,
+            "marca": _rget(v, "CardBrand"),
+            "tipo_tarjeta": _rget(v, "CardType"),
+            "operation_id": _rget(v, "OperationId"),
+            "ticket_pos": pos_ticket or None,
+            "origen": "caja" if str(pos_mode) == "1" else ("manual" if str(pos_mode) == "0" else None),
+            "response_code": _rget(v, "ResponseCode"),
+            "mensaje": _rget(v, "ResponseMessage"),
+            "registrada_ticket": registrada,
+            "candidato": bool(candidato),
+        })
+    return filas
+
+
 def _parse_fecha_pos(valor):
     """Convierte AccountingDate del POS a timestamp (hora local), o None."""
     if not valor:
@@ -808,6 +860,66 @@ class GetnetModule:
         finally:
             self.disconnect()
 
+    def get_sales_detail(self, timeout=40, espera_puerto=5):
+        """
+        Detalle de ventas (Command 105): todas las transacciones que quedan en la
+        memoria del POS desde el último cierre (Command 103). A diferencia del 101,
+        una venta no queda tapada por otra posterior.
+
+        No espera una venta en curso: si el puerto está tomado más de
+        `espera_puerto` segundos, devuelve error "ocupado".
+
+        Returns:
+            dict: {"status": "found|not_found|error|ocupado", "ventas": [...], "response": {...}|None, "message": str}
+        """
+        if not self._serial_lock.acquire(timeout=espera_puerto):
+            if self._venta_en_curso:
+                return {"status": "ocupado", "ventas": [],
+                        "message": "Hay una venta en curso en el POS (esperando al cliente). "
+                                   "El detalle de ventas se puede pedir cuando termine."}
+            return {"status": "ocupado", "ventas": [],
+                    "message": "El POS está ocupado (consulta en curso). Intente de nuevo en unos segundos."}
+        try:
+            if not self.connect():
+                return {"status": "error", "ventas": [], "message": self.last_error or "No se pudo conectar al POS"}
+            try:
+                command = {
+                    "Command": 105,
+                    "PrintOnPos": False,
+                    "DateTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                if not self._send_command(command):
+                    return {"status": "error", "ventas": [], "message": "Error enviando comando de detalle de ventas"}
+
+                response = self._read_response(timeout=timeout, expected_function_code=105)
+                if not response:
+                    return {"status": "error", "ventas": [], "message": "Sin respuesta del POS al pedir el detalle de ventas"}
+
+                ventas = _rget(response, "SaleDetails") or []
+                if not isinstance(ventas, list):
+                    ventas = []
+                codigo = _rget(response, "ResponseCode")
+                # 21/99 = sin transacciones (mismos códigos que el 101).
+                if codigo in (21, 99):
+                    return {"status": "not_found", "ventas": [], "response": response}
+                # Cualquier otro código (ej. 96 "Comando en curso": el POS tiene una
+                # venta en pantalla) no dice nada de qué ventas tiene en memoria.
+                if codigo not in (0, "0"):
+                    return {"status": "error", "ventas": [], "response": response,
+                            "message": f"El POS no entregó el detalle ({_rget(response, 'ResponseMessage')}, código {codigo})"}
+                if not ventas:
+                    return {"status": "not_found", "ventas": [], "response": response}
+                return {"status": "found", "ventas": [v for v in ventas if isinstance(v, dict)], "response": response}
+
+            except Exception as e:
+                logger.error(f"[GETNET] Error consultando detalle de ventas: {e}")
+                return {"status": "error", "ventas": [], "message": str(e)}
+
+            finally:
+                self.disconnect()
+        finally:
+            self._serial_lock.release()
+
     def reconciliar_ticket(self, ticket, amount=None, timeout=15, sent_at=None, known_operation_ids=(), known_auth_codes=()):
         """
         Intenta resolver una venta que quedó INDETERMINADA consultando al POS
@@ -833,6 +945,10 @@ class GetnetModule:
         En hardware real el FunctionCode de la respuesta es el del comando
         consultado (101), no el de la venta original (100).
 
+        Si el 101 no alcanza para concluir, se consulta el detalle de ventas
+        (Command 105), que sí trae el Ticket: resuelve al instante una venta
+        cancelada en la máquina sin esperar RECON_VENTANA_SEGUNDOS.
+
         Returns:
             dict: {"status": "aprobado|rechazado|no_resuelto", "response": {...}|None, "message": str}
         """
@@ -843,6 +959,71 @@ class GetnetModule:
             getnet_log.info(f"↪️ No se pudo reconciliar el ticket {ticket}: {last.get('message')}. Sigue INDETERMINADA.")
             return {"status": "no_resuelto", "message": last.get("message")}
 
+        res = self._reconciliar_con_ultimo(last, ticket, amount, sent_at, known_operation_ids, known_auth_codes)
+        if res["status"] != "no_resuelto":
+            return res
+        # El 101 no alcanzó (venta cancelada sin comprobante, o tapada por otra
+        # posterior): el detalle de ventas lo resuelve si el POS informa tickets.
+        return self._reconciliar_con_detalle(ticket, amount) or res
+
+    def _reconciliar_con_detalle(self, ticket, amount):
+        """
+        Resuelve la venta con el detalle de ventas (Command 105), que en el A920
+        trae el Ticket de cada venta. Que el POS conteste el 105 (y no "Comando
+        en curso") significa que no tiene ninguna venta en curso: si nuestro
+        ticket no está en su memoria, la venta terminó sin cobrarse (cancelada o
+        rechazada en la máquina).
+        Devuelve None si no se puede concluir (sin respuesta, o el POS no
+        informa tickets): queda lo que dijo el 101.
+        """
+        getnet_log.info(f"🔍 Reconciliando ticket {ticket}: consultando al POS el detalle de ventas (Command 105)...")
+        det = self.get_sales_detail()
+        if det["status"] in ("error", "ocupado"):
+            getnet_log.info(f"↪️ No se pudo obtener el detalle de ventas: {det.get('message')}.")
+            return None
+
+        ventas = det["ventas"]
+        if det["status"] == "found" and not any(str(_rget(v, "Ticket", "") or "").strip() for v in ventas):
+            getnet_log.info(f"↪️ El detalle de ventas del POS no informa tickets: no sirve para confirmar el ticket {ticket}.")
+            return None
+
+        propias = [v for v in ventas if str(_rget(v, "Ticket", "") or "").strip() == str(ticket).strip()]
+        if not propias:
+            getnet_log.info(
+                f"↪️ Reconciliación del ticket {ticket}: el POS está libre y la venta no aparece en su detalle de ventas "
+                f"({len(ventas)} venta(s) en memoria): fue cancelada o rechazada en la máquina. No se cobró — es seguro reintentar."
+            )
+            # Resumen y no la lista completa: el detalle trae todas las ventas desde el último cierre.
+            resumen = {"FunctionCode": 105, "ResponseCode": _rget(det.get("response") or {}, "ResponseCode"),
+                       "Ticket": str(ticket), "VentasEnMemoria": len(ventas), "Origen": "detalle_ventas"}
+            return {"status": "rechazado", "response": resumen,
+                    "message": "La venta no aparece en el detalle de ventas del POS: fue cancelada o rechazada en la máquina, no se cobró."}
+
+        aprobada = next((v for v in propias if _rget(v, "ResponseCode") in (0, "0")), None)
+        venta = aprobada or propias[-1]
+        venta_json = json.dumps(venta, ensure_ascii=False, default=str)
+        if amount is not None and not _mismo_monto(_rget(venta, "Amount"), amount):
+            getnet_log.info(
+                f"↪️ Reconciliación del ticket {ticket}: aparece en el detalle de ventas pero el monto no coincide "
+                f"(${_rget(venta, 'Amount')} vs ${amount}). Requiere revisión manual desde el panel. JSON: {venta_json}"
+            )
+            return None
+        if aprobada:
+            getnet_log.info(
+                f"✅ Reconciliación exitosa (por ticket en el detalle de ventas): el POS confirma que el ticket {ticket} fue "
+                f"APROBADO (autorización {_rget(venta, 'AuthorizationCode')}). JSON: {venta_json}"
+            )
+            return {"status": "aprobado", "response": normalizar_comprobante(venta, ticket, "detalle_ventas"),
+                    "message": "Venta confirmada como APROBADA en el detalle de ventas del POS."}
+        getnet_log.info(
+            f"↪️ Reconciliación exitosa (por ticket en el detalle de ventas): el POS informa el ticket {ticket} como "
+            f"RECHAZADO (código {_rget(venta, 'ResponseCode')}). No se cobró — es seguro descartarla. JSON: {venta_json}"
+        )
+        return {"status": "rechazado", "response": normalizar_comprobante(venta, ticket, "detalle_ventas"),
+                "message": f"Venta informada como RECHAZADA en el detalle de ventas del POS (código {_rget(venta, 'ResponseCode')})."}
+
+    def _reconciliar_con_ultimo(self, last, ticket, amount, sent_at, known_operation_ids, known_auth_codes):
+        """Resultado de la reconciliación a partir del último comprobante (Command 101)."""
         ventana_cumplida = sent_at is not None and time.time() - sent_at >= RECON_VENTANA_SEGUNDOS
 
         if last["status"] == "not_found":
@@ -928,7 +1109,7 @@ class GetnetModule:
         except Exception:
             return None
 
-    def resolver_venta_pendiente(self, ticket, amount=None, sent_at=None, known_operation_ids=(), escucha=5,
+    def resolver_venta_pendiente(self, ticket, amount=None, sent_at=None, known_operation_ids=(), escucha=2,
                                  known_auth_codes=()):
         """
         Intenta conocer el resultado real de una venta que quedó sin confirmar.

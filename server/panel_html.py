@@ -253,6 +253,11 @@ PANEL_HTML = """<!DOCTYPE html>
   .tx-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 18px; font-size: 12px; color: var(--muted); }
   .tx-meta b { color: var(--text-2); font-weight: 500; font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
   .tx-note { font-size: 12.5px; color: var(--text-2); background: rgba(133,144,171,0.08); border-radius: 6px; padding: 6px 10px; }
+  .dv-wrap { overflow-x: auto; }
+  .dv-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .dv-table th, .dv-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .dv-table th { color: var(--muted); font-weight: 500; }
+  .dv-table tr.dv-cand td { background: rgba(34,197,94,0.08); }
 
   /* ── Pestañas y log ── */
   .tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; flex-wrap: wrap; }
@@ -892,8 +897,10 @@ async function loadPendientes() {
           <span>Creada <b>${esc(fmtFecha(tx.created_at))}</b></span>
         </div>
         ${tx.nota ? `<div class="tx-note">${esc(tx.nota)}</div>` : ''}
+        ${renderDetalleVentas(tx.tx_id)}
         <div class="actions">
           <button class="btn btn-secondary btn-sm" data-tx="${esc(tx.tx_id)}" onclick="reconciliarTx(this.dataset.tx)">Reconsultar POS</button>
+          ${tx.tipo === 'getnet' ? `<button class="btn btn-secondary btn-sm" data-tx="${esc(tx.tx_id)}" onclick="detalleVentasTx(this)">Ver detalle de ventas del POS</button>` : ''}
           <button class="btn btn-secondary btn-sm btn-ok" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'APROBADO')">Marcar aprobada</button>
           <button class="btn btn-secondary btn-sm btn-bad" data-tx="${esc(tx.tx_id)}" onclick="resolverTx(this.dataset.tx, 'RECHAZADO')">Marcar rechazada</button>
         </div>
@@ -939,6 +946,84 @@ async function resolverTx(txId, estado) {
     loadPendientes();
   } catch (e) {
     showToast('Error resolviendo', false);
+  }
+}
+
+// Detalle de ventas del POS Getnet (Command 105), por tx_id. Se guarda aquí para
+// que el refresco periódico de la lista no borre la tabla.
+const detallesVentas = {};
+
+function renderDetalleVentas(txId) {
+  const d = detallesVentas[txId];
+  if (!d) return '';
+  if (!d.ventas.length) {
+    return `<div class="tx-note">El POS no tiene ventas en memoria (lista vacía o ya se hizo el cierre del día).
+      Si la venta pendiente no aparece en el reporte del POS, no se cobró.</div>`;
+  }
+  const filas = d.ventas.map(v => `
+    <tr class="${v.candidato ? 'dv-cand' : ''}">
+      <td>${esc(v.fecha || '-')}</td>
+      <td>${esc(fmtMonto(v.monto))}</td>
+      <td>${esc(v.autorizacion || '-')}</td>
+      <td>${esc([v.marca, v.tipo_tarjeta, v.last4].filter(Boolean).join(' ') || '-')}</td>
+      <td>${v.origen === 'caja' ? 'Caja' : (v.origen === 'manual' ? 'Manual en POS' : '-')}</td>
+      <td>${esc(v.mensaje || (v.response_code === 0 ? 'Aprobado' : v.response_code) || '-')}</td>
+      <td>${v.registrada_ticket ? `Sí (ticket ${esc(v.registrada_ticket)})` : 'No'}</td>
+      <td>${v.candidato && v.autorizacion
+        ? `<button class="btn btn-secondary btn-sm btn-ok" data-tx="${esc(txId)}" data-auth="${esc(v.autorizacion)}"
+             onclick="aprobarConComprobante(this.dataset.tx, this.dataset.auth)">Aprobar con este</button>`
+        : ''}</td>
+    </tr>`).join('');
+  const resumen = d.candidatos === 1
+    ? 'Hay 1 venta que coincide con la pendiente (resaltada). Verifique y apruébela con ese comprobante.'
+    : d.candidatos > 1
+      ? `Hay ${d.candidatos} ventas que podrían ser la pendiente: revise el comprobante impreso antes de elegir.`
+      : 'Ninguna venta del POS coincide con la pendiente (monto, hora y origen caja): todo indica que no se cobró.';
+  return `<div class="tx-note">${resumen}</div>
+    <div class="dv-wrap"><table class="dv-table">
+      <tr><th>Fecha POS</th><th>Monto</th><th>Autorización</th><th>Tarjeta</th><th>Origen</th><th>Estado</th><th>En el sistema</th><th></th></tr>
+      ${filas}
+    </table></div>`;
+}
+
+async function detalleVentasTx(btn) {
+  const txId = btn.dataset.tx;
+  btn.disabled = true;
+  btn.textContent = 'Consultando POS...';
+  try {
+    const r = await fetch(`/panel/pendientes/${encodeURIComponent(txId)}/detalle_ventas`, { method: 'POST' });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast(j.error || 'No se pudo obtener el detalle de ventas', false);
+      return;
+    }
+    detallesVentas[txId] = j;
+  } catch (e) {
+    showToast('Error consultando el detalle de ventas', false);
+  } finally {
+    loadPendientes();
+  }
+}
+
+async function aprobarConComprobante(txId, autorizacion) {
+  const nota = prompt(`¿Aprobar la venta pendiente con el comprobante del POS de autorización ${autorizacion}?\\nNota (opcional):`, '');
+  if (nota === null) return;
+  try {
+    const r = await fetch(`/panel/pendientes/${encodeURIComponent(txId)}/resolver`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ estado: 'APROBADO', autorizacion, nota })
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      showToast(j.error || 'No se pudo aprobar', false);
+      return;
+    }
+    delete detallesVentas[txId];
+    showToast('Aprobada con el comprobante del POS', true);
+    loadPendientes();
+  } catch (e) {
+    showToast('Error aprobando', false);
   }
 }
 
