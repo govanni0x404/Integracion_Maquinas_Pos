@@ -215,7 +215,8 @@ MP_PAUSA_REINTENTO = 2
 MP_INTERVALO_CONSULTA = 2
 # La orden expira sola en MP un poco después de que dejamos de esperarla, así
 # una orden que no se pudo cancelar no deja el terminal bloqueado 16 minutos.
-MP_MARGEN_EXPIRACION = 120
+# Corto a propósito: mientras la orden sigue abierta el terminal no acepta otra.
+MP_MARGEN_EXPIRACION = 10
 
 
 def _mp_aprobado(order_info):

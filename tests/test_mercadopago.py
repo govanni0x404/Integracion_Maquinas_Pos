@@ -429,3 +429,15 @@ def test_caja_habilitada_mp():
         assert not srv._caja_habilitada_mp("2", "CAJA_TEST")
     finally:
         srv.ALLOWED_MP = original
+
+
+def test_orden_expira_poco_despues_del_timeout(monkeypatch):
+    from server import api_server
+    enviados = []
+
+    def fake_http(method, url, headers=None, payload=None, timeout=15):
+        enviados.append(payload)
+        raise RuntimeError("corta después de crear")
+    monkeypatch.setattr(api_server, "_http_json", fake_http)
+    api_server.process_mercadopago("NEWLAND_N950__TEST", "TOKEN", 1000, timeout=90)
+    assert enviados[0]["expiration_time"] == "PT100S"
