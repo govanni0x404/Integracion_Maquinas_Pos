@@ -95,7 +95,7 @@ def _find_and_load_dotenv():
                 default_env = "\n".join([
                     "HTTP_PORT=5005",
                     "BIND_HOST=127.0.0.1",
-                    "ID_SUCURSAL=1",
+                    "ID_SUCURSAL=",
                     "NOMBRE_CAJA=",
                     "TRANSBANK_TERMINAL_ID=",
                     "GETNET_TERMINAL_ID=",
@@ -235,7 +235,8 @@ ESCUCHA_SOLO_LOCAL = BIND_HOST in ("127.0.0.1", "localhost", "::1")
 AGENTES_REMOTOS = os.environ.get("AGENTES_REMOTOS", "false").lower() == "true"
 
 # Identificación
-ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "1")
+# Vacío = caja sin configurar: el panel permite la clave de soporte solo en ese caso.
+ID_SUCURSAL = os.environ.get("ID_SUCURSAL", "").strip()
 # Siempre en MAYÚSCULAS (igual que el nombre_caja que llega en cada petición).
 NOMBRE_CAJA = os.environ.get("NOMBRE_CAJA", socket.gethostname()).strip().upper()
 ID_TERMINAL = os.environ.get("ID_TERMINAL", os.environ.get("TERMINAL_ID", f"POS_{NOMBRE_CAJA}"))

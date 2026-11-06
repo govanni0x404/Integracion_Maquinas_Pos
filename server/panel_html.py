@@ -1272,9 +1272,9 @@ LOGIN_HTML = """<!DOCTYPE html>
          background: transparent; color: #55617f; cursor: pointer; border-radius: 6px; display: grid; place-items: center; }
   .eye:hover { background: #eef2f9; }
   .hint { font-size: 12px; color: var(--muted); margin: 8px 2px 0; }
-  .row { display: flex; justify-content: flex-end; margin-top: 10px; }
-  .row a { color: var(--blue); font-size: 12.5px; font-weight: 600; text-decoration: none; }
-  .row a:hover { text-decoration: underline; }
+  .first { background: #fff4e6; border: 1px solid #f7c58a; color: #7a4a10; border-radius: 8px;
+           padding: 10px 12px; font-size: 12.5px; margin: 0 0 16px; }
+  .first strong { display: block; color: #b45f06; font-size: 13px; margin-bottom: 2px; }
   .btn { width: 100%; height: 48px; margin-top: 18px; border: 0; border-radius: 8px; cursor: pointer;
          display: flex; align-items: center; justify-content: center; gap: 10px;
          background: linear-gradient(180deg, var(--orange), var(--orange-2)); color: #fff;
@@ -1375,19 +1375,27 @@ LOGIN_HTML = """<!DOCTYPE html>
     <h3>Bienvenido</h3>
     <p class="who">Panel de configuración{% if nombre_caja %} · Caja <b>{{ nombre_caja }}</b>{% endif %}</p>
 
-    <label class="lbl" for="password" id="lbl">ApiKey del cliente</label>
+    {% if primera_vez %}
+    <div class="first">
+      <strong>Primera configuración</strong>
+      Esta caja aún no tiene sucursal asignada. Ingrese con la clave de soporte y configure el
+      <b>ID de sucursal</b>. Después, el panel se abrirá solo con la ApiKey del cliente.
+    </div>
+    {% endif %}
+    <label class="lbl" for="password">{% if primera_vez %}Clave de soporte{% else %}ApiKey del cliente{% endif %}</label>
     <div class="field">
       <span class="ico" aria-hidden="true">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M17 6l3 3M14.5 8.5l2 2"/></svg>
       </span>
-      <input type="password" id="password" placeholder="Ingrese la ApiKey"
+      <input type="password" id="password" placeholder="{% if primera_vez %}Ingrese la clave de soporte{% else %}Ingrese la ApiKey{% endif %}"
              autocomplete="off" spellcheck="false" autofocus required>
       <button type="button" class="eye" id="eye" title="Mostrar / ocultar">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
-    <p class="hint" id="hint">La ApiKey de la conexión «API PAGO ELECTRONICO» de la sucursal {{ id_sucursal }} en la intranet.</p>
-    <div class="row"><a href="#" id="modo">Ingresar con clave de soporte</a></div>
+    {% if not primera_vez %}
+    <p class="hint">La ApiKey de la conexión «API PAGO ELECTRONICO» de la sucursal {{ id_sucursal }} en la intranet.</p>
+    {% endif %}
 
     <button type="submit" class="btn" id="btn">
       <span id="btnTxt">Ingresar</span>
@@ -1397,27 +1405,17 @@ LOGIN_HTML = """<!DOCTYPE html>
 
     <div class="secure">
       <svg width="18" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/></svg>
-      <span>Acceso seguro: la ApiKey se valida con la intranet Datamaule. Solo disponible desde este equipo.</span>
+      <span>{% if primera_vez %}La clave de soporte solo funciona mientras la caja no tenga sucursal.{% else %}Acceso seguro: la ApiKey se valida con la intranet Datamaule.{% endif %} Solo disponible desde este equipo.</span>
     </div>
   </form>
 </main>
 
 <script>
-let soporte = false;
+const soporte = {{ 'true' if primera_vez else 'false' }};
 const inp = document.getElementById('password');
 document.getElementById('eye').addEventListener('click', () => {
   inp.type = inp.type === 'password' ? 'text' : 'password';
   inp.focus();
-});
-document.getElementById('modo').addEventListener('click', e => {
-  e.preventDefault();
-  soporte = !soporte;
-  document.getElementById('lbl').textContent = soporte ? 'Clave de soporte' : 'ApiKey del cliente';
-  document.getElementById('hint').style.display = soporte ? 'none' : '';
-  document.getElementById('modo').textContent = soporte ? 'Ingresar con ApiKey' : 'Ingresar con clave de soporte';
-  inp.placeholder = soporte ? 'Ingrese la clave de soporte' : 'Ingrese la ApiKey';
-  document.getElementById('err').textContent = '';
-  inp.value = ''; inp.type = 'password'; inp.focus();
 });
 document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault();

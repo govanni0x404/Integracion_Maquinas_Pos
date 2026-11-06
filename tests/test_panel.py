@@ -143,9 +143,40 @@ def clave_panel(monkeypatch):
     return "clave-panel-test"
 
 
+@pytest.fixture
+def caja_sin_sucursal(monkeypatch):
+    """Primera configuración: la caja todavía no tiene ID_SUCURSAL."""
+    from server import api_server
+    monkeypatch.setattr(api_server, "ID_SUCURSAL", "")
+
+
 def test_panel_sin_sesion_muestra_la_pantalla_de_clave(client_sin_sesion):
     html = client_sin_sesion.get("/panel").get_data(as_text=True)
     assert "ApiKey del cliente" in html and "Máquinas de pago" not in html
+    # Con sucursal asignada no se ofrece la clave de soporte
+    assert ">Clave de soporte</label>" not in html and "Primera configuración" not in html
+
+
+def test_primera_vez_muestra_solo_la_clave_de_soporte(client_sin_sesion, caja_sin_sucursal):
+    html = client_sin_sesion.get("/panel").get_data(as_text=True)
+    assert "Primera configuración" in html and "Clave de soporte" in html
+    assert ">ApiKey del cliente</label>" not in html
+
+
+def test_con_sucursal_la_clave_de_soporte_se_rechaza(client_sin_sesion, clave_panel):
+    r = client_sin_sesion.post("/panel/login", json={"password": clave_panel})
+    assert r.status_code == 403 and "ApiKey" in r.get_json()["error"]
+    assert client_sin_sesion.get("/panel/pendientes").status_code == 401
+
+
+def test_campo_id_sucursal_siempre_visible(client, monkeypatch, tmp_path):
+    # .env sin la línea ID_SUCURSAL: el panel igual debe mostrar el campo para asignarla
+    from server import api_server
+    env = tmp_path / ".env"
+    env.write_text("NOMBRE_CAJA=CAJA_TEST\n", encoding="utf-8")
+    monkeypatch.setattr(api_server, "_env_en_uso", lambda: env)
+    html = client.get("/panel").get_data(as_text=True)
+    assert 'name="ID_SUCURSAL"' in html
 
 
 @pytest.mark.parametrize("metodo,ruta", [
@@ -157,7 +188,7 @@ def test_panel_sin_sesion_401(client_sin_sesion, metodo, ruta):
     assert r.status_code == 401 and r.get_json()["login"] is True
 
 
-def test_panel_login_y_logout(client_sin_sesion, clave_panel):
+def test_panel_login_y_logout(client_sin_sesion, clave_panel, caja_sin_sucursal):
     c = client_sin_sesion
     assert c.post("/panel/login", json={"password": "mala"}).status_code == 401
     assert c.get("/panel/pendientes").status_code == 401
@@ -168,7 +199,7 @@ def test_panel_login_y_logout(client_sin_sesion, clave_panel):
     assert c.get("/panel/pendientes").status_code == 401
 
 
-def test_panel_login_solo_local(client_sin_sesion, clave_panel):
+def test_panel_login_solo_local(client_sin_sesion, clave_panel, caja_sin_sucursal):
     r = client_sin_sesion.post("/panel/login", json={"password": clave_panel}, environ_base=LAN)
     assert r.status_code == 403
 

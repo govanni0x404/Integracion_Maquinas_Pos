@@ -134,6 +134,15 @@ def _clave_sesion_panel():
         return os.urandom(32)
 
 
+def _id_sucursal_configurada():
+    """ID_SUCURSAL como entero; 0 si la caja todavía no tiene sucursal (primera
+    configuración). Mientras sea 0 se permite la clave de soporte."""
+    try:
+        return max(0, int(str(ID_SUCURSAL).strip()))
+    except ValueError:
+        return 0
+
+
 # Rutas del panel que se pueden usar sin haber ingresado la clave.
 RUTAS_PANEL_SIN_SESION = {"/panel", "/panel/login"}
 
@@ -947,6 +956,11 @@ class APIServer:
             data = data if isinstance(data, dict) else {}
             if "apikey" in data:
                 return _login_con_apikey(str(data.get("apikey") or "").strip())
+            if _id_sucursal_configurada():
+                # Solo para la primera configuración: con la sucursal asignada se entra con la ApiKey.
+                logger.warning("[PANEL] Intento con clave de soporte rechazado: la caja ya tiene sucursal")
+                return jsonify({"ok": False, "error": "La clave de soporte solo se usa en la primera "
+                                                      "configuración: ingrese con la ApiKey"}), 403
             if not clave_panel_valida(str(data.get("password") or "")):
                 logger.warning("[PANEL] Clave de soporte incorrecta")
                 return jsonify({"ok": False, "error": "Clave incorrecta"}), 401
@@ -964,10 +978,7 @@ class APIServer:
             espera = freno_apikey_panel.espera()
             if espera:
                 return jsonify({"ok": False, "error": f"Demasiados intentos: espere {espera} s"}), 429
-            try:
-                id_sucursal = int(str(ID_SUCURSAL).strip())
-            except ValueError:
-                id_sucursal = 0
+            id_sucursal = _id_sucursal_configurada()
             if id_sucursal <= 0:
                 return jsonify({"ok": False, "error": "Esta caja no tiene ID_SUCURSAL configurado: "
                                                       "ingrese con la clave de soporte"}), 400
@@ -1060,8 +1071,9 @@ class APIServer:
                 USAR_POS_FISICO, USAR_GETNET, MAX_TRANSACTION_TIME, TIMEOUT_SERVER
             )
             if not session.get("panel_ok"):
+                sucursal = _id_sucursal_configurada()
                 return render_template_string(LOGIN_HTML, app_name=APP_NAME, nombre_caja=NOMBRE_CAJA,
-                                              id_sucursal=ID_SUCURSAL)
+                                              id_sucursal=sucursal, primera_vez=not sucursal)
 
             # Buscar .env — en --onefile el .env está junto al .exe
             env_path = str(_env_en_uso() or "") or None
@@ -1095,6 +1107,7 @@ class APIServer:
             env_vars_ui.pop("TUU_API_KEY", None)
             # Si el .env no los define, el panel muestra los valores por defecto
             # con los que realmente corre el servicio (Getnet sí, Transbank no).
+            env_vars_ui.setdefault("ID_SUCURSAL", "")  # siempre visible: se asigna en la primera configuración
             env_vars_ui.setdefault("USAR_POS_FISICO", "false")
             env_vars_ui.setdefault("USAR_GETNET", "true")
             env_vars_ui.setdefault("USAR_MP", "true")
