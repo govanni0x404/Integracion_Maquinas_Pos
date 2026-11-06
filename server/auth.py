@@ -109,14 +109,52 @@ class LimitadorClave:
         return False
 
 
+class FrenoIntentos:
+    """
+    Freno simple para el ingreso con ApiKey: tras max_fallos ApiKeys rechazadas
+    en `ventana` segundos no se consulta la intranet durante `bloqueo` segundos.
+    Evita usar la caja para probar ApiKeys contra la intranet.
+    """
+
+    def __init__(self, max_fallos=5, ventana=60, bloqueo=60):
+        self.max_fallos, self.ventana, self.bloqueo = max_fallos, ventana, bloqueo
+        self._fallos = deque()
+        self._bloqueado_hasta = 0.0
+        self._lock = threading.Lock()
+
+    def reiniciar(self):
+        with self._lock:
+            self._fallos.clear()
+            self._bloqueado_hasta = 0.0
+
+    def espera(self) -> int:
+        """Segundos que faltan para poder volver a intentar (0 = libre)."""
+        with self._lock:
+            return max(0, int(self._bloqueado_hasta - time.time() + 0.999))
+
+    def fallo(self):
+        ahora = time.time()
+        with self._lock:
+            self._fallos.append(ahora)
+            while self._fallos and self._fallos[0] < ahora - self.ventana:
+                self._fallos.popleft()
+            if len(self._fallos) >= self.max_fallos:
+                self._bloqueado_hasta = ahora + self.bloqueo
+                self._fallos.clear()
+                _log.warning(f"[AUTH] Panel: {self.max_fallos} ApiKeys rechazadas en {self.ventana}s: "
+                             f"ingreso con ApiKey en pausa {self.bloqueo}s (posible fuerza bruta)")
+
+
 MAX_FALLOS = 10
 _limitador_api = LimitadorClave("API", lambda p: _password_matches(p), max_fallos=MAX_FALLOS)
 _limitador_panel = LimitadorClave("Panel", lambda p: _panel_password_matches(p), max_fallos=5)
+freno_apikey_panel = FrenoIntentos()
 
 
 def _reiniciar_bloqueo():
     _limitador_api.reiniciar()
     _limitador_panel.reiniciar()
+    freno_apikey_panel.reiniciar()
 
 
 def _clave_valida(pwd: str) -> bool:

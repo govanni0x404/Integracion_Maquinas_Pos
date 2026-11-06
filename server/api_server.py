@@ -39,6 +39,8 @@ from config.settings import (
     ALLOW_TUU_KEY_IN_REQUEST,
 )
 from server.auth import require_basic_auth, check_basic_auth_header, check_local_panel_request, clave_panel_valida
+from server.auth import freno_apikey_panel
+from core import intranet
 from server.panel_html import PANEL_HTML, LOGIN_HTML
 from pos.pos_module import POSModule
 from core import transaction_store as tx_store
@@ -933,17 +935,81 @@ class APIServer:
                                     "login": True}), 401
             return None
 
-        @app.route("/panel/login", methods=["POST"])
-        def panel_login():
-            data = request.get_json(force=True, silent=True) or {}
-            if not clave_panel_valida(str(data.get("password") or "")):
-                logger.warning("[PANEL] Clave del panel incorrecta")
-                return jsonify({"ok": False, "error": "Clave incorrecta"}), 401
+        def _abrir_sesion_panel(acceso):
             session.clear()
             session.permanent = True
             session["panel_ok"] = True
-            logger.info("[PANEL] Ingreso al panel de control")
+            session["panel_acceso"] = acceso
+
+        @app.route("/panel/login", methods=["POST"])
+        def panel_login():
+            data = request.get_json(force=True, silent=True)
+            data = data if isinstance(data, dict) else {}
+            if "apikey" in data:
+                return _login_con_apikey(str(data.get("apikey") or "").strip())
+            if not clave_panel_valida(str(data.get("password") or "")):
+                logger.warning("[PANEL] Clave de soporte incorrecta")
+                return jsonify({"ok": False, "error": "Clave incorrecta"}), 401
+            _abrir_sesion_panel("soporte")
+            logger.info("[PANEL] Ingreso al panel de control (clave de soporte)")
             return jsonify({"ok": True})
+
+        def _login_con_apikey(api_key):
+            """Valida la ApiKey del cliente contra la intranet (api/Conexiones) con
+            el ID_SUCURSAL de esta caja. Sin respuesta de la intranet se acepta la
+            última ApiKey que ésta aprobó (se guarda solo su hash)."""
+            from config import settings as cfg
+            if not api_key:
+                return jsonify({"ok": False, "error": "Ingrese la ApiKey"}), 400
+            espera = freno_apikey_panel.espera()
+            if espera:
+                return jsonify({"ok": False, "error": f"Demasiados intentos: espere {espera} s"}), 429
+            try:
+                id_sucursal = int(str(ID_SUCURSAL).strip())
+            except ValueError:
+                id_sucursal = 0
+            if id_sucursal <= 0:
+                return jsonify({"ok": False, "error": "Esta caja no tiene ID_SUCURSAL configurado: "
+                                                      "ingrese con la clave de soporte"}), 400
+
+            respaldo = cfg.DATA_DIR / "panel_apikey.json"
+            pista = f"...{api_key[-4:]}" if len(api_key) > 8 else "(corta)"
+            r = intranet.consultar_conexiones(cfg.INTRANET_CONEXIONES_URL, cfg.INTRANET_ID_SOFTWARE,
+                                              api_key, id_sucursal)
+            estado = r.get("estado")
+
+            if estado == intranet.VALIDA:
+                intranet.guardar_respaldo(respaldo, api_key, id_sucursal)
+                _abrir_sesion_panel("apikey")
+                logger.info("[PANEL] Ingreso al panel con ApiKey %s validada por la intranet (sucursal %s)",
+                            pista, id_sucursal)
+                return jsonify({"ok": True})
+
+            if estado == intranet.NO_DISPONIBLE and r.get("sin_respuesta"):
+                validada = intranet.respaldo_coincide(respaldo, api_key, id_sucursal)
+                if validada:
+                    _abrir_sesion_panel("apikey_sin_conexion")
+                    logger.warning("[PANEL] Intranet no disponible (%s): ingreso con ApiKey %s validada "
+                                   "por última vez el %s", r.get("mensaje"), pista, validada)
+                    return jsonify({"ok": True, "aviso": "Intranet sin respuesta: se usó la última "
+                                                         "validación de esta ApiKey"})
+                freno_apikey_panel.fallo()
+                logger.warning("[PANEL] Intranet no disponible (%s) y la ApiKey %s no coincide con la "
+                               "última validada", r.get("mensaje"), pista)
+                return jsonify({"ok": False, "error": f"{r.get('mensaje')} No se pudo validar la ApiKey."}), 503
+
+            if estado == intranet.BLOQUEADA:
+                retry = r.get("retry_after") or 0
+                logger.warning("[PANEL] La intranet bloqueó temporalmente la validación de ApiKey (retry_after=%s)", retry)
+                return jsonify({"ok": False, "error": r.get("mensaje") + (f" Reintente en {retry} s." if retry else "")}), 429
+
+            if estado == intranet.NO_COINCIDE and intranet.respaldo_coincide(respaldo, api_key, id_sucursal):
+                # La intranet ya no reconoce la ApiKey que antes aprobó: deja de servir sin conexión.
+                intranet.borrar_respaldo(respaldo)
+                logger.warning("[PANEL] ApiKey %s revocada en la intranet: se borra su respaldo local", pista)
+            freno_apikey_panel.fallo()
+            logger.warning("[PANEL] ApiKey %s rechazada (%s): %s", pista, estado, r.get("mensaje"))
+            return jsonify({"ok": False, "error": r.get("mensaje") or "ApiKey no válida"}), 401
 
         @app.route("/panel/logout", methods=["POST"])
         def panel_logout():
@@ -994,7 +1060,8 @@ class APIServer:
                 USAR_POS_FISICO, USAR_GETNET, MAX_TRANSACTION_TIME, TIMEOUT_SERVER
             )
             if not session.get("panel_ok"):
-                return render_template_string(LOGIN_HTML, app_name=APP_NAME, nombre_caja=NOMBRE_CAJA)
+                return render_template_string(LOGIN_HTML, app_name=APP_NAME, nombre_caja=NOMBRE_CAJA,
+                                              id_sucursal=ID_SUCURSAL)
 
             # Buscar .env — en --onefile el .env está junto al .exe
             env_path = str(_env_en_uso() or "") or None

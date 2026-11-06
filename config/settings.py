@@ -15,8 +15,16 @@ API_AUTH_PASS_HASH = "pbkdf2_sha256$200000$b5fada2c559914f4d7b835f3673e6039$fcbf
 # su hash, fija en el código (no se cambia desde el panel ni desde el .env).
 PANEL_PASS_HASH = "pbkdf2_sha256$200000$8d88004b727010a9fcad552b5d77a5f8$2ea8c50be71bba321583643ab819aa9d566da9ca30c520e40118b518a051ca78"
 
+# Ingreso al panel con la ApiKey del cliente: se valida contra la intranet
+# (api/Conexiones) con el ID_SUCURSAL de esta caja. Fijo en el código: si se
+# pudiera cambiar desde el .env, alguien podría apuntarlo a un servidor propio
+# que apruebe cualquier ApiKey. PANEL_PASS_HASH queda como clave de soporte.
+INTRANET_CONEXIONES_URL = "https://datamaule.cl/miIntranet/index.php/api/Conexiones"
+INTRANET_ID_SOFTWARE = 22  # API PAGO ELECTRONICO (id del software en la intranet)
+
 # Claves que NUNCA se leen del .env — siempre hardcodeadas en el código
-_ENV_PROTECTED_KEYS = {"API_AUTH_USER", "API_AUTH_PASS", "API_AUTH_PASS_HASH", "PANEL_PASS_HASH"}
+_ENV_PROTECTED_KEYS = {"API_AUTH_USER", "API_AUTH_PASS", "API_AUTH_PASS_HASH", "PANEL_PASS_HASH",
+                       "INTRANET_CONEXIONES_URL", "INTRANET_ID_SOFTWARE"}
 
 def _parse_env_file(path: str) -> dict:
     """Parser minimo de .env — no requiere el modulo dotenv."""

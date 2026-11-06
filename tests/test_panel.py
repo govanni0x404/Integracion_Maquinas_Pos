@@ -145,7 +145,7 @@ def clave_panel(monkeypatch):
 
 def test_panel_sin_sesion_muestra_la_pantalla_de_clave(client_sin_sesion):
     html = client_sin_sesion.get("/panel").get_data(as_text=True)
-    assert "Clave del panel" in html and "Máquinas de pago" not in html
+    assert "ApiKey del cliente" in html and "Máquinas de pago" not in html
 
 
 @pytest.mark.parametrize("metodo,ruta", [

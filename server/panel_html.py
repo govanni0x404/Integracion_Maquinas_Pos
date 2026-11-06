@@ -1208,6 +1208,9 @@ LOGIN_HTML = """<!DOCTYPE html>
   button:hover:not(:disabled) { background: var(--accent-2); }
   button:disabled { opacity: .6; cursor: default; }
   .err { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 20px; }
+  .hint { margin-top: 6px; font-size: 12px; }
+  .modo { display: block; margin-top: 6px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  .modo:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -1216,20 +1219,35 @@ LOGIN_HTML = """<!DOCTYPE html>
     <div class="mark">AP</div>
     <div><h1>{{ app_name }}</h1><p>Panel de control{% if nombre_caja %} · {{ nombre_caja }}{% endif %}</p></div>
   </div>
-  <label for="password">Clave del panel</label>
-  <input type="password" id="password" autocomplete="current-password" autofocus required>
+  <label for="password" id="lbl">ApiKey del cliente</label>
+  <input type="password" id="password" autocomplete="off" spellcheck="false" autofocus required>
+  <p class="hint" id="hint">La misma ApiKey de la conexión «API PAGO ELECTRONICO» en la intranet (sucursal {{ id_sucursal }}).</p>
   <button type="submit" id="btn">Ingresar</button>
   <div class="err" id="err"></div>
+  <a href="#" class="modo" id="modo">Ingresar con clave de soporte</a>
 </form>
 <script>
+let soporte = false;
+document.getElementById('modo').addEventListener('click', e => {
+  e.preventDefault();
+  soporte = !soporte;
+  document.getElementById('lbl').textContent = soporte ? 'Clave de soporte' : 'ApiKey del cliente';
+  document.getElementById('hint').style.display = soporte ? 'none' : '';
+  document.getElementById('modo').textContent = soporte ? 'Ingresar con ApiKey' : 'Ingresar con clave de soporte';
+  document.getElementById('err').textContent = '';
+  const inp = document.getElementById('password');
+  inp.value = ''; inp.focus();
+});
 document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   const btn = document.getElementById('btn'), err = document.getElementById('err');
+  const valor = document.getElementById('password').value;
   btn.disabled = true; err.textContent = '';
+  if (!soporte) btn.textContent = 'Validando con la intranet…';
   try {
     const r = await fetch('/panel/login', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ password: document.getElementById('password').value })
+      body: JSON.stringify(soporte ? { password: valor } : { apikey: valor.trim() })
     });
     const j = await r.json().catch(() => ({}));
     if (j.ok) { location.reload(); return; }
@@ -1238,7 +1256,7 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
   } catch (_) {
     err.textContent = 'Sin conexión con el servicio';
   }
-  btn.disabled = false;
+  btn.disabled = false; btn.textContent = 'Ingresar';
 });
 </script>
 </body>
