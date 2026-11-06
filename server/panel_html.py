@@ -1186,64 +1186,245 @@ LOGIN_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ app_name }} — Ingresar</title>
 <style>
-  :root { --bg:#0b1020; --card:#141c31; --border:#243050; --border-2:#2f3c60; --text:#e6eaf3;
-          --muted:#8590ab; --accent:#4f7cff; --accent-2:#3b63e0; --red:#ef4444; }
+  :root {
+    --navy-0:#07122e; --navy-1:#0b1c45; --navy-2:#10275e; --navy-3:#1a3a80;
+    --orange:#f7941d; --orange-2:#ef6c0f; --green:#7cbf2a; --green-2:#4e9a1b;
+    --ink:#0f1f45; --muted:#5b6785; --line:#d6dceb; --blue:#2f6fde; --red:#d93636;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
-         background: var(--bg); color: var(--text);
-         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .card { width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--border);
-          border-radius: 12px; padding: 28px; }
-  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
-  .mark { width: 36px; height: 36px; border-radius: 9px; background: var(--accent); display: grid;
-          place-items: center; font-weight: 700; }
-  h1 { font-size: 16px; margin: 0; }
-  p { margin: 0; color: var(--muted); font-size: 12.5px; }
-  label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
-  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-2);
-          background: #0f1628; color: var(--text); font: inherit; }
-  input:focus { outline: none; border-color: var(--accent); }
-  button { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 8px; cursor: pointer;
-           background: var(--accent); color: #fff; font: inherit; font-weight: 600; }
-  button:hover:not(:disabled) { background: var(--accent-2); }
-  button:disabled { opacity: .6; cursor: default; }
-  .err { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 20px; }
-  .hint { margin-top: 6px; font-size: 12px; }
-  .modo { display: block; margin-top: 6px; color: var(--muted); font-size: 12.5px; text-align: center; }
-  .modo:hover { color: var(--text); }
+  html, body { height: 100%; }
+  body {
+    margin: 0; min-height: 100vh; overflow-x: hidden; color: #e8eefc;
+    font: 14px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    background:
+      radial-gradient(1200px 700px at 78% 40%, rgba(47,111,222,.35), transparent 60%),
+      radial-gradient(900px 600px at 10% 90%, rgba(26,58,128,.55), transparent 60%),
+      linear-gradient(135deg, var(--navy-0) 0%, var(--navy-1) 45%, var(--navy-2) 100%);
+  }
+
+  /* ── Decoración de fondo (código) ── */
+  .deco { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .glyph { position: absolute; font: 700 72px/1 Consolas, "Courier New", monospace; color: rgba(120,150,220,.12); }
+  .glyph.g1 { top: 40px; left: 33%; }
+  .glyph.g2 { top: 40px; right: 56px; font-size: 64px; color: rgba(140,160,210,.28); }
+  .win { position: absolute; border-radius: 16px; background: rgba(9,20,52,.72);
+         border: 1px solid rgba(110,140,220,.14); box-shadow: 0 30px 80px rgba(0,0,0,.35); }
+  .win.w1 { top: 12%; left: 40%; width: 50%; height: 64%; }
+  .win.w2 { bottom: 5%; left: 29%; width: 17%; height: 32%; }
+  .win.w3 { bottom: 5%; right: 7%; width: 30%; height: 25%; }
+  .dots { position: absolute; top: 14px; left: 18px; display: flex; gap: 8px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .dots i:nth-child(1){ background:#e2554f; } .dots i:nth-child(2){ background:#e5a33a; } .dots i:nth-child(3){ background:#4fbf5f; }
+  .code { position: absolute; top: 60px; left: 6%; right: 6%; display: grid; gap: 15px; }
+  .ln { display: flex; gap: 10px; align-items: center; }
+  .ln b { height: 8px; border-radius: 5px; display: block; opacity: .75; }
+  .c-p { background:#7b5bd6; } .c-b { background:#3b7fd9; } .c-y { background:#b8955a; }
+  .c-t { background:#3aa7b0; } .c-g { background:#5ea95a; } .c-s { background:#56637f; }
+
+  /* ── Layout ── */
+  .wrap { position: relative; z-index: 1; min-height: 100vh; display: grid;
+          grid-template-columns: minmax(0, 1fr) 400px; align-items: center;
+          gap: 48px; max-width: 1240px; margin: 0 auto; padding: 48px 32px; }
+
+  /* ── Lado izquierdo ── */
+  .logo { display: inline-flex; align-items: center; gap: 12px; background: #fff; border-radius: 12px;
+          padding: 16px 22px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .logo .txt { line-height: 1; }
+  .logo .sup { font-size: 8.5px; font-weight: 700; letter-spacing: .06em; color: var(--ink); text-transform: uppercase; }
+  .logo .name { font-size: 25px; font-weight: 900; letter-spacing: -.02em; color: var(--ink); margin: 2px 0 4px; }
+  .logo .name span { color: var(--green-2); }
+  .logo .tag { font-size: 9.5px; font-style: italic; font-weight: 600; color: var(--green-2); }
+  .logo .tag em { color: var(--orange); font-style: normal; }
+  h2 { font-size: 34px; line-height: 1.18; margin: 40px 0 12px; font-weight: 800; letter-spacing: -.01em; }
+  h2 span { color: var(--orange); }
+  .lead { color: #c4cee6; font-size: 15px; max-width: 440px; margin: 0 0 22px; }
+  .feats { display: grid; gap: 10px; max-width: 380px; }
+  .feat { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-radius: 10px;
+          background: rgba(20,38,88,.62); border: 1px solid rgba(120,150,220,.2); }
+  .feat .ic { width: 38px; height: 38px; flex: none; border-radius: 9px; display: grid; place-items: center;
+              background: rgba(47,111,222,.25); color: #8fb4ff; }
+  .feat .ic.o { background: rgba(247,148,29,.18); color: var(--orange); }
+  .feat .ic.g { background: rgba(124,191,42,.18); color: var(--green); }
+  .feat strong { display: block; font-size: 13.5px; color: #fff; }
+  .feat small { display: block; font-size: 12px; color: #b3bfdc; }
+  .firma { margin-top: 26px; font: italic 600 22px/1.25 "Segoe Script", "Brush Script MT", "Comic Sans MS", cursive; color: #fff; }
+  .firma::after { content: ""; display: block; width: 170px; height: 3px; margin-top: 4px; border-radius: 3px;
+                  background: linear-gradient(90deg, var(--orange), transparent); }
+
+  /* ── Tarjeta de ingreso ── */
+  .card { background: linear-gradient(180deg, #f7f9fd, #e9eef7); color: var(--ink); border-radius: 18px;
+          padding: 34px 32px 26px; box-shadow: 0 30px 80px rgba(3,10,30,.55); }
+  .card .brand { text-align: center; }
+  .card .brand h1 { margin: 0; font-size: 28px; font-weight: 900; letter-spacing: .03em; color: var(--ink); }
+  .card .brand .sub { color: var(--blue); font-size: 15px; font-weight: 500; }
+  .card .brand .bar { width: 58px; height: 3px; border-radius: 3px; background: var(--orange); margin: 6px auto 0; }
+  .card h3 { text-align: center; font-size: 26px; margin: 26px 0 2px; font-weight: 800; }
+  .card .who { text-align: center; color: var(--muted); font-size: 13.5px; margin: 0 0 22px; }
+  .card .who b { color: var(--ink); }
+  label.lbl { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted); margin: 0 0 6px 2px; }
+  .field { position: relative; }
+  .field .ico { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #7d89a6; display: flex; }
+  .field input { width: 100%; height: 48px; padding: 0 46px 0 42px; border-radius: 8px; border: 1px solid var(--line);
+                 background: #fff; color: var(--ink); font: 14px "Segoe UI", system-ui, sans-serif; letter-spacing: .02em; }
+  .field input::placeholder { color: #9aa4bc; letter-spacing: 0; }
+  .field input:focus { outline: none; border: 2px solid var(--navy-3); padding-left: 41px; box-shadow: 0 0 0 4px rgba(47,111,222,.12); }
+  .eye { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border: 0;
+         background: transparent; color: #55617f; cursor: pointer; border-radius: 6px; display: grid; place-items: center; }
+  .eye:hover { background: #eef2f9; }
+  .hint { font-size: 12px; color: var(--muted); margin: 8px 2px 0; }
+  .row { display: flex; justify-content: flex-end; margin-top: 10px; }
+  .row a { color: var(--blue); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+  .row a:hover { text-decoration: underline; }
+  .btn { width: 100%; height: 48px; margin-top: 18px; border: 0; border-radius: 8px; cursor: pointer;
+         display: flex; align-items: center; justify-content: center; gap: 10px;
+         background: linear-gradient(180deg, var(--orange), var(--orange-2)); color: #fff;
+         font: 600 15px "Segoe UI", system-ui, sans-serif; box-shadow: 0 10px 22px rgba(239,108,15,.32); }
+  .btn:hover:not(:disabled) { filter: brightness(1.05); }
+  .btn:disabled { opacity: .7; cursor: default; }
+  .err { color: var(--red); font-size: 13px; min-height: 20px; margin-top: 10px; text-align: center; }
+  .secure { display: flex; gap: 12px; align-items: flex-start; margin-top: 14px; padding-top: 16px;
+            border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .secure svg { flex: none; color: var(--ink); margin-top: 1px; }
+
+  @media (max-width: 920px) {
+    .wrap { grid-template-columns: 1fr; max-width: 460px; padding: 24px 16px; gap: 24px; }
+    .left .feats, .left .lead, .left .firma, .left h2, .deco { display: none; }
+    .left { text-align: center; }
+  }
 </style>
 </head>
 <body>
-<form class="card" id="loginForm">
-  <div class="brand">
-    <div class="mark">AP</div>
-    <div><h1>{{ app_name }}</h1><p>Panel de control{% if nombre_caja %} · {{ nombre_caja }}{% endif %}</p></div>
+<div class="deco" aria-hidden="true">
+  <div class="glyph g1">{ }</div>
+  <div class="glyph g2">&lt;/&gt;</div>
+  <div class="win w1">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="code">
+      <div class="ln"><b class="c-s" style="width:6%"></b><b class="c-p" style="width:9%"></b><b class="c-b" style="width:20%"></b><b class="c-y" style="width:13%"></b><b class="c-t" style="width:5%"></b></div>
+      <div class="ln" style="padding-left:4%"><b class="c-p" style="width:9%"></b><b class="c-y" style="width:11%"></b><b class="c-b" style="width:18%"></b></div>
+      <div class="ln" style="padding-left:4%"><b class="c-s" style="width:46%"></b></div>
+      <div class="ln" style="padding-left:8%"><b class="c-p" style="width:9%"></b><b class="c-b" style="width:16%"></b><b class="c-y" style="width:11%"></b><b class="c-t" style="width:4%"></b></div>
+      <div class="ln" style="padding-left:4%"><b class="c-y" style="width:13%"></b><b class="c-g" style="width:25%"></b></div>
+      <div class="ln"><b class="c-p" style="width:9%"></b><b class="c-b" style="width:16%"></b><b class="c-y" style="width:11%"></b><b class="c-t" style="width:4%"></b></div>
+      <div class="ln" style="padding-left:8%"><b class="c-p" style="width:11%"></b><b class="c-s" style="width:18%"></b><b class="c-y" style="width:6%"></b></div>
+      <div class="ln" style="padding-left:8%"><b class="c-s" style="width:24%"></b><b class="c-s" style="width:11%"></b></div>
+      <div class="ln" style="padding-left:4%"><b class="c-p" style="width:9%"></b><b class="c-b" style="width:18%"></b><b class="c-y" style="width:13%"></b><b class="c-t" style="width:5%"></b></div>
+      <div class="ln" style="padding-left:8%"><b class="c-s" style="width:38%"></b></div>
+      <div class="ln"><b class="c-s" style="width:36%"></b></div>
+      <div class="ln" style="padding-left:4%"><b class="c-y" style="width:13%"></b><b class="c-g" style="width:25%"></b></div>
+    </div>
   </div>
-  <label for="password" id="lbl">ApiKey del cliente</label>
-  <input type="password" id="password" autocomplete="off" spellcheck="false" autofocus required>
-  <p class="hint" id="hint">La misma ApiKey de la conexión «API PAGO ELECTRONICO» en la intranet (sucursal {{ id_sucursal }}).</p>
-  <button type="submit" id="btn">Ingresar</button>
-  <div class="err" id="err"></div>
-  <a href="#" class="modo" id="modo">Ingresar con clave de soporte</a>
-</form>
+  <div class="win w2"></div>
+  <div class="win w3">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="code">
+      <div class="ln"><b class="c-g" style="width:7%"></b><b class="c-s" style="width:55%"></b></div>
+      <div class="ln"><b class="c-s" style="width:70%"></b></div>
+      <div class="ln"><b class="c-g" style="width:7%"></b><b class="c-s" style="width:40%"></b><b class="c-y" style="width:26%"></b></div>
+      <div class="ln"><b class="c-y" style="width:12%"></b><b class="c-s" style="width:66%"></b></div>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+  <section class="left">
+    <div class="logo" aria-label="Soluciones Informáticas Datamaule SpA">
+      <svg width="44" height="34" viewBox="0 0 44 34" aria-hidden="true">
+        <g fill="#7cbf2a">
+          <rect x="0" y="13" width="5" height="5" rx="1" opacity=".55"/><rect x="7" y="6" width="6" height="6" rx="1" opacity=".75"/>
+          <rect x="7" y="14" width="6" height="6" rx="1"/><rect x="7" y="22" width="6" height="6" rx="1" opacity=".75"/>
+          <rect x="15" y="2" width="7" height="7" rx="1"/><rect x="15" y="11" width="7" height="7" rx="1" fill="#4e9a1b"/>
+          <rect x="15" y="20" width="7" height="7" rx="1"/><rect x="24" y="6" width="8" height="8" rx="1" fill="#4e9a1b"/>
+          <rect x="24" y="16" width="8" height="8" rx="1"/><rect x="34" y="11" width="9" height="9" rx="1" fill="#4e9a1b"/>
+        </g>
+      </svg>
+      <div class="txt">
+        <div class="sup">Soluciones informáticas</div>
+        <div class="name">DATA<span>MAULE</span></div>
+        <div class="tag">Innovación <em>•</em> Tecnología <em>•</em> Soporte</div>
+      </div>
+    </div>
+
+    <h2>Pagos electrónicos<br><span>integrados a tu caja</span></h2>
+    <p class="lead">{{ app_name }} conecta tu sistema de ventas con las máquinas de pago, de forma segura y sin intervención manual.</p>
+
+    <div class="feats">
+      <div class="feat"><div class="ic o">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg>
+      </div><div><strong>Transbank y Getnet</strong><small>Ventas con tarjeta desde el POS físico</small></div></div>
+      <div class="feat"><div class="ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>
+      </div><div><strong>Mercado Pago y TUU</strong><small>Cobro remoto en terminales Point y PRO2</small></div></div>
+      <div class="feat"><div class="ic g">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+      </div><div><strong>Reconciliación automática</strong><small>Ninguna venta queda sin confirmar</small></div></div>
+      <div class="feat"><div class="ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 8v9M19 12v5"/></svg>
+      </div><div><strong>Soporte y mejora continua</strong><small>Te acompañamos en cada etapa</small></div></div>
+    </div>
+
+    <div class="firma">Tecnología que<br>construye oportunidades</div>
+  </section>
+
+  <form class="card" id="loginForm">
+    <div class="brand">
+      <h1>DATAMAULE</h1>
+      <div class="sub">{{ app_name }}</div>
+      <div class="bar"></div>
+    </div>
+    <h3>Bienvenido</h3>
+    <p class="who">Panel de configuración{% if nombre_caja %} · Caja <b>{{ nombre_caja }}</b>{% endif %}</p>
+
+    <label class="lbl" for="password" id="lbl">ApiKey del cliente</label>
+    <div class="field">
+      <span class="ico" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M17 6l3 3M14.5 8.5l2 2"/></svg>
+      </span>
+      <input type="password" id="password" placeholder="Ingrese la ApiKey"
+             autocomplete="off" spellcheck="false" autofocus required>
+      <button type="button" class="eye" id="eye" title="Mostrar / ocultar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <p class="hint" id="hint">La ApiKey de la conexión «API PAGO ELECTRONICO» de la sucursal {{ id_sucursal }} en la intranet.</p>
+    <div class="row"><a href="#" id="modo">Ingresar con clave de soporte</a></div>
+
+    <button type="submit" class="btn" id="btn">
+      <span id="btnTxt">Ingresar</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </button>
+    <div class="err" id="err"></div>
+
+    <div class="secure">
+      <svg width="18" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/></svg>
+      <span>Acceso seguro: la ApiKey se valida con la intranet Datamaule. Solo disponible desde este equipo.</span>
+    </div>
+  </form>
+</main>
+
 <script>
 let soporte = false;
+const inp = document.getElementById('password');
+document.getElementById('eye').addEventListener('click', () => {
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  inp.focus();
+});
 document.getElementById('modo').addEventListener('click', e => {
   e.preventDefault();
   soporte = !soporte;
   document.getElementById('lbl').textContent = soporte ? 'Clave de soporte' : 'ApiKey del cliente';
   document.getElementById('hint').style.display = soporte ? 'none' : '';
   document.getElementById('modo').textContent = soporte ? 'Ingresar con ApiKey' : 'Ingresar con clave de soporte';
+  inp.placeholder = soporte ? 'Ingrese la clave de soporte' : 'Ingrese la ApiKey';
   document.getElementById('err').textContent = '';
-  const inp = document.getElementById('password');
-  inp.value = ''; inp.focus();
+  inp.value = ''; inp.type = 'password'; inp.focus();
 });
 document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const btn = document.getElementById('btn'), err = document.getElementById('err');
-  const valor = document.getElementById('password').value;
+  const btn = document.getElementById('btn'), txt = document.getElementById('btnTxt'), err = document.getElementById('err');
+  const valor = inp.value;
   btn.disabled = true; err.textContent = '';
-  if (!soporte) btn.textContent = 'Validando con la intranet…';
+  txt.textContent = soporte ? 'Ingresando…' : 'Validando con la intranet…';
   try {
     const r = await fetch('/panel/login', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1252,11 +1433,11 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
     const j = await r.json().catch(() => ({}));
     if (j.ok) { location.reload(); return; }
     err.textContent = j.error || 'No se pudo ingresar';
-    document.getElementById('password').select();
+    inp.select();
   } catch (_) {
     err.textContent = 'Sin conexión con el servicio';
   }
-  btn.disabled = false; btn.textContent = 'Ingresar';
+  btn.disabled = false; txt.textContent = 'Ingresar';
 });
 </script>
 </body>
