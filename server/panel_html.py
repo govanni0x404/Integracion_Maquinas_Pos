@@ -9,17 +9,19 @@ PANEL_HTML = """<!DOCTYPE html>
 <style>
   /* Sin fuentes externas: el panel se abre en la caja aunque no haya internet. */
   :root {
-    --bg:        #0b1020;
-    --surface:   #10172a;
-    --card:      #141c31;
-    --card-2:    #18213a;
-    --border:    #243050;
-    --border-2:  #2f3c60;
+    --bg:        #071330;
+    --surface:   #0b1a3d;
+    --card:      #0f2049;
+    --card-2:    #132755;
+    --border:    #1e3468;
+    --border-2:  #2a4380;
     --text:      #e6eaf3;
     --text-2:    #b4bdd3;
     --muted:     #8590ab;
-    --accent:    #4f7cff;
-    --accent-2:  #3b63e0;
+    --accent:    #4f86ff;
+    --accent-2:  #3b6fe6;
+    --orange:    #f7941d;
+    --orange-2:  #ef6c0f;
     --green:     #22c55e;
     --yellow:    #f5a524;
     --red:       #ef4444;
@@ -36,7 +38,13 @@ PANEL_HTML = """<!DOCTYPE html>
 
   body {
     font-family: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
-    background: var(--bg);
+    background:
+      radial-gradient(700px 500px at 0% 0%, rgba(229,72,77,.10), transparent 70%),
+      radial-gradient(700px 500px at 100% 10%, rgba(155,109,255,.12), transparent 70%),
+      radial-gradient(800px 600px at 100% 100%, rgba(0,168,232,.10), transparent 70%),
+      radial-gradient(700px 500px at 0% 100%, rgba(255,122,26,.08), transparent 70%),
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     min-height: 100vh;
     font-size: 14px;
@@ -50,9 +58,13 @@ PANEL_HTML = """<!DOCTYPE html>
   /* ── Barra superior ── */
   .topbar {
     position: sticky; top: 0; z-index: 50;
-    background: rgba(11,16,32,0.92);
+    background: rgba(7,19,48,0.92);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border);
+  }
+  .topbar::before {
+    content: ""; display: block; height: 3px;
+    background: linear-gradient(90deg, var(--c-transbank) 0 25%, var(--c-getnet) 25% 50%, var(--c-mp) 50% 75%, var(--c-tuu) 75% 100%);
   }
   .topbar-inner {
     max-width: 1240px; margin: 0 auto;
@@ -60,13 +72,15 @@ PANEL_HTML = """<!DOCTYPE html>
     display: flex; align-items: center; gap: 14px;
   }
   .brand-mark {
-    width: 36px; height: 36px; border-radius: 9px;
-    background: var(--accent);
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(145deg, var(--orange), var(--orange-2));
+    box-shadow: 0 6px 16px rgba(239,108,15,.35);
     display: grid; place-items: center;
     color: #fff; font-weight: 700; font-size: 15px; letter-spacing: -0.02em;
   }
   .brand h1 { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
   .brand p  { font-size: 12px; color: var(--muted); }
+  .brand .eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .12em; color: var(--orange); }
   .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
   .clock { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
@@ -77,7 +91,7 @@ PANEL_HTML = """<!DOCTYPE html>
     display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 28px;
     align-items: start;
   }
-  .sidenav { position: sticky; top: 88px; }
+  .sidenav { position: sticky; top: 92px; }
   .sidenav-group { margin-bottom: 18px; }
   .sidenav-title {
     font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
@@ -138,6 +152,11 @@ PANEL_HTML = """<!DOCTYPE html>
   /* ── Resumen ── */
   .summary { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 16px; }
   .tile { padding: 18px 20px; }
+  .tile-methods { position: relative; overflow: hidden; }
+  .tile-methods::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--c-transbank) 0 25%, var(--c-getnet) 25% 50%, var(--c-mp) 50% 75%, var(--c-tuu) 75% 100%);
+  }
   .tile-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
   .tile-value { font-size: 24px; font-weight: 700; margin-top: 6px; letter-spacing: -0.02em; word-break: break-word; }
   .tile-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
@@ -201,7 +220,7 @@ PANEL_HTML = """<!DOCTYPE html>
     position: sticky; bottom: 16px; z-index: 40;
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 12px 16px;
-    background: rgba(20,28,49,0.96);
+    background: rgba(15,32,73,0.96);
     backdrop-filter: blur(8px);
     border: 1px solid var(--border-2);
     border-radius: var(--radius);
@@ -219,8 +238,9 @@ PANEL_HTML = """<!DOCTYPE html>
   }
   .btn:hover { text-decoration: none; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover:not(:disabled) { background: var(--accent-2); }
+  .btn-primary { background: linear-gradient(180deg, var(--orange), var(--orange-2)); color: #fff;
+                 box-shadow: 0 6px 16px rgba(239,108,15,.28); }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
   .btn-secondary { background: var(--card-2); color: var(--text); border-color: var(--border-2); }
   .btn-secondary:hover:not(:disabled) { border-color: var(--accent); }
   .btn-sm { padding: 6px 12px; font-size: 12.5px; }
@@ -269,6 +289,10 @@ PANEL_HTML = """<!DOCTYPE html>
   }
   .tab:hover { color: var(--text); }
   .tab.active { background: var(--card-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--border-2); }
+  .tab.active[data-machine-tab="transbank"] { box-shadow: inset 0 0 0 1px var(--c-transbank), inset 0 -3px 0 var(--c-transbank); }
+  .tab.active[data-machine-tab="getnet"]    { box-shadow: inset 0 0 0 1px var(--c-getnet),    inset 0 -3px 0 var(--c-getnet); }
+  .tab.active[data-machine-tab="mp"]        { box-shadow: inset 0 0 0 1px var(--c-mp),        inset 0 -3px 0 var(--c-mp); }
+  .tab.active[data-machine-tab="tuu"]       { box-shadow: inset 0 0 0 1px var(--c-tuu),       inset 0 -3px 0 var(--c-tuu); }
   .log-box {
     font-family: var(--mono);
     font-size: 12px; line-height: 1.65;
@@ -404,8 +428,11 @@ PANEL_HTML = """<!DOCTYPE html>
 <!-- Barra superior -->
 <header class="topbar">
   <div class="topbar-inner">
-    <div class="brand-mark">AP</div>
+    <div class="brand-mark" aria-hidden="true">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2.5"/><rect x="8" y="5" width="8" height="5" rx="1"/><path d="M8.5 14h.01M12 14h.01M15.5 14h.01M8.5 18h.01M12 18h.01M15.5 18h.01"/></svg>
+    </div>
     <div class="brand">
+      <div class="eyebrow">DATAMAULE</div>
       <h1>{{ app_name }}</h1>
       <p>Panel de control · {{ nombre_caja }} · puerto {{ http_port }}</p>
     </div>
@@ -1187,8 +1214,9 @@ LOGIN_HTML = """<!DOCTYPE html>
 <title>{{ app_name }} — Ingresar</title>
 <style>
   :root {
-    --navy-0:#07122e; --navy-1:#0b1c45; --navy-2:#10275e; --navy-3:#1a3a80;
-    --orange:#f7941d; --orange-2:#ef6c0f; --green:#7cbf2a; --green-2:#4e9a1b;
+    --navy-0:#06112b; --navy-1:#0a1a42; --navy-2:#0f2558; --navy-3:#1a3a80;
+    --orange:#f7941d; --orange-2:#ef6c0f; --green:#7cbf2a; --green-2:#4e9a1b; --ok:#22c55e;
+    --tb:#e5484d; --gn:#ff7a1a; --mp:#00a8e8; --tuu:#9b6dff;
     --ink:#0f1f45; --muted:#5b6785; --line:#d6dceb; --blue:#2f6fde; --red:#d93636;
   }
   * { box-sizing: border-box; }
@@ -1197,70 +1225,80 @@ LOGIN_HTML = """<!DOCTYPE html>
     margin: 0; min-height: 100vh; overflow-x: hidden; color: #e8eefc;
     font: 14px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
     background:
-      radial-gradient(1200px 700px at 78% 40%, rgba(47,111,222,.35), transparent 60%),
-      radial-gradient(900px 600px at 10% 90%, rgba(26,58,128,.55), transparent 60%),
-      linear-gradient(135deg, var(--navy-0) 0%, var(--navy-1) 45%, var(--navy-2) 100%);
+      radial-gradient(520px 420px at 12% 18%, rgba(229,72,77,.16), transparent 70%),
+      radial-gradient(560px 460px at 55% 30%, rgba(255,122,26,.12), transparent 70%),
+      radial-gradient(620px 520px at 60% 92%, rgba(0,168,232,.16), transparent 70%),
+      radial-gradient(560px 480px at 95% 70%, rgba(155,109,255,.18), transparent 70%),
+      linear-gradient(135deg, var(--navy-0) 0%, var(--navy-1) 50%, var(--navy-2) 100%);
   }
-
-  /* ── Decoración de fondo (código) ── */
-  .deco { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
-  .glyph { position: absolute; font: 700 72px/1 Consolas, "Courier New", monospace; color: rgba(120,150,220,.12); }
-  .glyph.g1 { top: 40px; left: 33%; }
-  .glyph.g2 { top: 40px; right: 56px; font-size: 64px; color: rgba(140,160,210,.28); }
-  .win { position: absolute; border-radius: 16px; background: rgba(9,20,52,.72);
-         border: 1px solid rgba(110,140,220,.14); box-shadow: 0 30px 80px rgba(0,0,0,.35); }
-  .win.w1 { top: 12%; left: 40%; width: 50%; height: 64%; }
-  .win.w2 { bottom: 5%; left: 29%; width: 17%; height: 32%; }
-  .win.w3 { bottom: 5%; right: 7%; width: 30%; height: 25%; }
-  .dots { position: absolute; top: 14px; left: 18px; display: flex; gap: 8px; }
-  .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; }
-  .dots i:nth-child(1){ background:#e2554f; } .dots i:nth-child(2){ background:#e5a33a; } .dots i:nth-child(3){ background:#4fbf5f; }
-  .code { position: absolute; top: 60px; left: 6%; right: 6%; display: grid; gap: 15px; }
-  .ln { display: flex; gap: 10px; align-items: center; }
-  .ln b { height: 8px; border-radius: 5px; display: block; opacity: .75; }
-  .c-p { background:#7b5bd6; } .c-b { background:#3b7fd9; } .c-y { background:#b8955a; }
-  .c-t { background:#3aa7b0; } .c-g { background:#5ea95a; } .c-s { background:#56637f; }
+  /* Trama de puntos muy suave */
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none;
+    background-image: radial-gradient(rgba(150,175,235,.10) 1px, transparent 1.4px); background-size: 26px 26px; }
+  /* Franja de colores de las máquinas */
+  .stripe { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 2;
+    background: linear-gradient(90deg, var(--tb) 0 25%, var(--gn) 25% 50%, var(--mp) 50% 75%, var(--tuu) 75% 100%); }
 
   /* ── Layout ── */
   .wrap { position: relative; z-index: 1; min-height: 100vh; display: grid;
-          grid-template-columns: minmax(0, 1fr) 400px; align-items: center;
-          gap: 48px; max-width: 1240px; margin: 0 auto; padding: 48px 32px; }
+          grid-template-columns: minmax(0, 440px) minmax(0, 1fr) 400px; align-items: center;
+          gap: 36px; max-width: 1320px; margin: 0 auto; padding: 48px 32px; }
 
   /* ── Lado izquierdo ── */
   .logo { display: inline-flex; align-items: center; gap: 12px; background: #fff; border-radius: 12px;
-          padding: 16px 22px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+          padding: 14px 20px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
   .logo .txt { line-height: 1; }
   .logo .sup { font-size: 8.5px; font-weight: 700; letter-spacing: .06em; color: var(--ink); text-transform: uppercase; }
-  .logo .name { font-size: 25px; font-weight: 900; letter-spacing: -.02em; color: var(--ink); margin: 2px 0 4px; }
+  .logo .name { font-size: 24px; font-weight: 900; letter-spacing: -.02em; color: var(--ink); margin: 2px 0 4px; }
   .logo .name span { color: var(--green-2); }
   .logo .tag { font-size: 9.5px; font-style: italic; font-weight: 600; color: var(--green-2); }
   .logo .tag em { color: var(--orange); font-style: normal; }
-  h2 { font-size: 34px; line-height: 1.18; margin: 40px 0 12px; font-weight: 800; letter-spacing: -.01em; }
-  h2 span { color: var(--orange); }
-  .lead { color: #c4cee6; font-size: 15px; max-width: 440px; margin: 0 0 22px; }
-  .feats { display: grid; gap: 10px; max-width: 380px; }
-  .feat { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border-radius: 10px;
-          background: rgba(20,38,88,.62); border: 1px solid rgba(120,150,220,.2); }
-  .feat .ic { width: 38px; height: 38px; flex: none; border-radius: 9px; display: grid; place-items: center;
-              background: rgba(47,111,222,.25); color: #8fb4ff; }
-  .feat .ic.o { background: rgba(247,148,29,.18); color: var(--orange); }
-  .feat .ic.g { background: rgba(124,191,42,.18); color: var(--green); }
-  .feat strong { display: block; font-size: 13.5px; color: #fff; }
-  .feat small { display: block; font-size: 12px; color: #b3bfdc; }
-  .firma { margin-top: 26px; font: italic 600 22px/1.25 "Segoe Script", "Brush Script MT", "Comic Sans MS", cursive; color: #fff; }
-  .firma::after { content: ""; display: block; width: 170px; height: 3px; margin-top: 4px; border-radius: 3px;
-                  background: linear-gradient(90deg, var(--orange), transparent); }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-top: 34px; padding: 5px 12px; border-radius: 999px;
+             background: rgba(255,255,255,.06); border: 1px solid rgba(150,175,235,.2); font-size: 12px; color: #c4cee6; }
+  .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(34,197,94,.2); }
+  h2 { font-size: 33px; line-height: 1.15; margin: 14px 0 12px; font-weight: 800; letter-spacing: -.01em; }
+  h2 span { background: linear-gradient(90deg, var(--tb), var(--gn) 35%, var(--orange) 55%, var(--mp) 80%, var(--tuu));
+            -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { color: #c4cee6; font-size: 14.5px; margin: 0 0 20px; }
+  .maqs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .maq { position: relative; padding: 12px 12px 12px 14px; border-radius: 10px; overflow: hidden;
+         background: rgba(18,34,82,.66); border: 1px solid rgba(120,150,220,.18); }
+  .maq::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c); }
+  .maq .ic { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; margin-bottom: 8px;
+             color: var(--c); background: rgba(255,255,255,.08); background: color-mix(in srgb, var(--c) 18%, transparent); }
+  .maq strong { display: block; font-size: 13.5px; color: #fff; }
+  .maq small { display: block; font-size: 11.5px; color: #aab7d6; line-height: 1.35; }
+  .maq.tb { --c: var(--tb); } .maq.gn { --c: var(--gn); } .maq.mp { --c: var(--mp); } .maq.tuu { --c: var(--tuu); }
+  .firma { margin-top: 24px; font: italic 600 21px/1.25 "Segoe Script", "Brush Script MT", "Comic Sans MS", cursive; color: #fff; }
+  .firma::after { content: ""; display: block; width: 190px; height: 3px; margin-top: 6px; border-radius: 3px;
+                  background: linear-gradient(90deg, var(--tb), var(--gn), var(--mp), var(--tuu)); }
+
+  /* ── Ilustración de máquinas ── */
+  .scene { position: relative; align-self: stretch; display: grid; place-items: center; min-height: 520px; }
+  .scene svg { width: 100%; max-width: 440px; height: auto; filter: drop-shadow(0 30px 50px rgba(0,0,0,.45)); }
+  .float { animation: flotar 6s ease-in-out infinite; transform-box: fill-box; }
+  .float.d2 { animation-delay: -2s; } .float.d3 { animation-delay: -4s; }
+  @keyframes flotar { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-8px) } }
+  .onda { animation: onda 2.4s ease-out infinite; transform-box: fill-box; transform-origin: left center; }
+  .onda.o2 { animation-delay: .4s; } .onda.o3 { animation-delay: .8s; }
+  @keyframes onda { 0% { opacity: 0 } 30% { opacity: 1 } 100% { opacity: 0 } }
+  @media (prefers-reduced-motion: reduce) { .float, .onda { animation: none; } }
 
   /* ── Tarjeta de ingreso ── */
-  .card { background: linear-gradient(180deg, #f7f9fd, #e9eef7); color: var(--ink); border-radius: 18px;
-          padding: 34px 32px 26px; box-shadow: 0 30px 80px rgba(3,10,30,.55); }
-  .card .brand { text-align: center; }
-  .card .brand h1 { margin: 0; font-size: 28px; font-weight: 900; letter-spacing: .03em; color: var(--ink); }
-  .card .brand .sub { color: var(--blue); font-size: 15px; font-weight: 500; }
-  .card .brand .bar { width: 58px; height: 3px; border-radius: 3px; background: var(--orange); margin: 6px auto 0; }
-  .card h3 { text-align: center; font-size: 26px; margin: 26px 0 2px; font-weight: 800; }
-  .card .who { text-align: center; color: var(--muted); font-size: 13.5px; margin: 0 0 22px; }
+  .card { position: relative; overflow: hidden; background: linear-gradient(180deg, #f7f9fd, #e9eef7); color: var(--ink);
+          border-radius: 18px; padding: 36px 32px 26px; box-shadow: 0 30px 80px rgba(3,10,30,.55); }
+  .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px;
+    background: linear-gradient(90deg, var(--tb) 0 25%, var(--gn) 25% 50%, var(--mp) 50% 75%, var(--tuu) 75% 100%); }
+  .card .brand { display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .card .brand .pos { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; color: #fff;
+                      background: linear-gradient(145deg, var(--orange), var(--orange-2)); box-shadow: 0 8px 18px rgba(239,108,15,.35); }
+  .card .brand h1 { margin: 0; font-size: 22px; font-weight: 900; letter-spacing: .03em; color: var(--ink); line-height: 1.1; }
+  .card .brand .sub { color: var(--blue); font-size: 13.5px; font-weight: 600; }
+  .card h3 { text-align: center; font-size: 25px; margin: 24px 0 2px; font-weight: 800; }
+  .card .who { text-align: center; color: var(--muted); font-size: 13.5px; margin: 0 0 20px; }
   .card .who b { color: var(--ink); }
+  .first { background: #fff4e6; border: 1px solid #f7c58a; color: #7a4a10; border-radius: 8px;
+           padding: 10px 12px; font-size: 12.5px; margin: 0 0 16px; }
+  .first strong { display: block; color: #b45f06; font-size: 13px; margin-bottom: 2px; }
   label.lbl { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted); margin: 0 0 6px 2px; }
   .field { position: relative; }
   .field .ico { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #7d89a6; display: flex; }
@@ -1272,9 +1310,6 @@ LOGIN_HTML = """<!DOCTYPE html>
          background: transparent; color: #55617f; cursor: pointer; border-radius: 6px; display: grid; place-items: center; }
   .eye:hover { background: #eef2f9; }
   .hint { font-size: 12px; color: var(--muted); margin: 8px 2px 0; }
-  .first { background: #fff4e6; border: 1px solid #f7c58a; color: #7a4a10; border-radius: 8px;
-           padding: 10px 12px; font-size: 12.5px; margin: 0 0 16px; }
-  .first strong { display: block; color: #b45f06; font-size: 13px; margin-bottom: 2px; }
   .btn { width: 100%; height: 48px; margin-top: 18px; border: 0; border-radius: 8px; cursor: pointer;
          display: flex; align-items: center; justify-content: center; gap: 10px;
          background: linear-gradient(180deg, var(--orange), var(--orange-2)); color: #fff;
@@ -1282,49 +1317,26 @@ LOGIN_HTML = """<!DOCTYPE html>
   .btn:hover:not(:disabled) { filter: brightness(1.05); }
   .btn:disabled { opacity: .7; cursor: default; }
   .err { color: var(--red); font-size: 13px; min-height: 20px; margin-top: 10px; text-align: center; }
-  .secure { display: flex; gap: 12px; align-items: flex-start; margin-top: 14px; padding-top: 16px;
+  .secure { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; padding-top: 16px;
             border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
   .secure svg { flex: none; color: var(--ink); margin-top: 1px; }
+  .brands { display: flex; justify-content: center; gap: 14px; margin-top: 14px; font-size: 11px; font-weight: 600; color: var(--muted); flex-wrap: wrap; }
+  .brands span { display: inline-flex; align-items: center; gap: 5px; }
+  .brands i { width: 8px; height: 8px; border-radius: 3px; display: block; }
 
-  @media (max-width: 920px) {
-    .wrap { grid-template-columns: 1fr; max-width: 460px; padding: 24px 16px; gap: 24px; }
-    .left .feats, .left .lead, .left .firma, .left h2, .deco { display: none; }
+  @media (max-width: 1180px) {
+    .wrap { grid-template-columns: minmax(0, 1fr) 400px; }
+    .scene { display: none; }
+  }
+  @media (max-width: 860px) {
+    .wrap { grid-template-columns: 1fr; max-width: 460px; padding: 28px 16px; gap: 22px; }
+    .left .maqs, .left .lead, .left .firma, .left h2, .left .eyebrow { display: none; }
     .left { text-align: center; }
   }
 </style>
 </head>
 <body>
-<div class="deco" aria-hidden="true">
-  <div class="glyph g1">{ }</div>
-  <div class="glyph g2">&lt;/&gt;</div>
-  <div class="win w1">
-    <div class="dots"><i></i><i></i><i></i></div>
-    <div class="code">
-      <div class="ln"><b class="c-s" style="width:6%"></b><b class="c-p" style="width:9%"></b><b class="c-b" style="width:20%"></b><b class="c-y" style="width:13%"></b><b class="c-t" style="width:5%"></b></div>
-      <div class="ln" style="padding-left:4%"><b class="c-p" style="width:9%"></b><b class="c-y" style="width:11%"></b><b class="c-b" style="width:18%"></b></div>
-      <div class="ln" style="padding-left:4%"><b class="c-s" style="width:46%"></b></div>
-      <div class="ln" style="padding-left:8%"><b class="c-p" style="width:9%"></b><b class="c-b" style="width:16%"></b><b class="c-y" style="width:11%"></b><b class="c-t" style="width:4%"></b></div>
-      <div class="ln" style="padding-left:4%"><b class="c-y" style="width:13%"></b><b class="c-g" style="width:25%"></b></div>
-      <div class="ln"><b class="c-p" style="width:9%"></b><b class="c-b" style="width:16%"></b><b class="c-y" style="width:11%"></b><b class="c-t" style="width:4%"></b></div>
-      <div class="ln" style="padding-left:8%"><b class="c-p" style="width:11%"></b><b class="c-s" style="width:18%"></b><b class="c-y" style="width:6%"></b></div>
-      <div class="ln" style="padding-left:8%"><b class="c-s" style="width:24%"></b><b class="c-s" style="width:11%"></b></div>
-      <div class="ln" style="padding-left:4%"><b class="c-p" style="width:9%"></b><b class="c-b" style="width:18%"></b><b class="c-y" style="width:13%"></b><b class="c-t" style="width:5%"></b></div>
-      <div class="ln" style="padding-left:8%"><b class="c-s" style="width:38%"></b></div>
-      <div class="ln"><b class="c-s" style="width:36%"></b></div>
-      <div class="ln" style="padding-left:4%"><b class="c-y" style="width:13%"></b><b class="c-g" style="width:25%"></b></div>
-    </div>
-  </div>
-  <div class="win w2"></div>
-  <div class="win w3">
-    <div class="dots"><i></i><i></i><i></i></div>
-    <div class="code">
-      <div class="ln"><b class="c-g" style="width:7%"></b><b class="c-s" style="width:55%"></b></div>
-      <div class="ln"><b class="c-s" style="width:70%"></b></div>
-      <div class="ln"><b class="c-g" style="width:7%"></b><b class="c-s" style="width:40%"></b><b class="c-y" style="width:26%"></b></div>
-      <div class="ln"><b class="c-y" style="width:12%"></b><b class="c-s" style="width:66%"></b></div>
-    </div>
-  </div>
-</div>
+<div class="stripe" aria-hidden="true"></div>
 
 <main class="wrap">
   <section class="left">
@@ -1345,32 +1357,124 @@ LOGIN_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <h2>Pagos electrónicos<br><span>integrados a tu caja</span></h2>
-    <p class="lead">{{ app_name }} conecta tu sistema de ventas con las máquinas de pago, de forma segura y sin intervención manual.</p>
+    <div class="eyebrow"><i></i>Pasarela de pagos para tu caja</div>
+    <h2>Todas tus máquinas<br>de pago, <span>en una sola caja</span></h2>
+    <p class="lead">{{ app_name }} conecta tu sistema de ventas con cada máquina: cobra, confirma y reconcilia sin intervención manual.</p>
 
-    <div class="feats">
-      <div class="feat"><div class="ic o">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></svg>
-      </div><div><strong>Transbank y Getnet</strong><small>Ventas con tarjeta desde el POS físico</small></div></div>
-      <div class="feat"><div class="ic">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>
-      </div><div><strong>Mercado Pago y TUU</strong><small>Cobro remoto en terminales Point y PRO2</small></div></div>
-      <div class="feat"><div class="ic g">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
-      </div><div><strong>Reconciliación automática</strong><small>Ninguna venta queda sin confirmar</small></div></div>
-      <div class="feat"><div class="ic">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 8v9M19 12v5"/></svg>
-      </div><div><strong>Soporte y mejora continua</strong><small>Te acompañamos en cada etapa</small></div></div>
+    <div class="maqs">
+      <div class="maq tb"><div class="ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><rect x="8" y="5" width="8" height="5" rx="1"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>
+      </div><strong>Transbank</strong><small>POS integrado por puerto COM</small></div>
+      <div class="maq gn"><div class="ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M9 9l2 2 4-4M10 18h4"/></svg>
+      </div><strong>Getnet</strong><small>POS por USB con reconexión automática</small></div>
+      <div class="maq mp"><div class="ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M10 9a4 4 0 0 1 0 6M13 7a7 7 0 0 1 0 10"/></svg>
+      </div><strong>Mercado Pago</strong><small>Terminales Point en la nube</small></div>
+      <div class="maq tuu"><div class="ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="12" height="17" rx="2"/><path d="M8 2h8v3H8zM9 10h6M9 14h4"/></svg>
+      </div><strong>TUU</strong><small>Pago remoto en máquinas PRO2</small></div>
     </div>
 
-    <div class="firma">Tecnología que<br>construye oportunidades</div>
+    <div class="firma">Una caja, todas las<br>formas de cobrar</div>
   </section>
+
+  <div class="scene" aria-hidden="true">
+    <svg viewBox="0 0 440 520" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="gCard" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f7941d"/><stop offset="1" stop-color="#e5484d"/></linearGradient>
+        <linearGradient id="gScreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#14306e"/><stop offset="1" stop-color="#0b1c45"/></linearGradient>
+        <linearGradient id="gBody" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22305a"/><stop offset="1" stop-color="#141f40"/></linearGradient>
+      </defs>
+
+      <!-- TUU: POS de mano con impresora (morado) -->
+      <g class="float d3">
+        <g transform="translate(36 40) rotate(-10)">
+          <rect x="0" y="0" width="104" height="182" rx="18" fill="url(#gBody)" stroke="#9b6dff" stroke-width="2.5"/>
+          <rect x="14" y="-12" width="76" height="22" rx="6" fill="#9b6dff"/>
+          <rect x="22" y="-30" width="60" height="26" rx="2" fill="#f4f6fb"/>
+          <path d="M30 -22h44M30 -14h30" stroke="#9aa4bc" stroke-width="3" stroke-linecap="round"/>
+          <rect x="12" y="22" width="80" height="104" rx="8" fill="url(#gScreen)"/>
+          <rect x="22" y="36" width="36" height="6" rx="3" fill="#9b6dff"/>
+          <rect x="22" y="52" width="60" height="10" rx="3" fill="#e8eefc" opacity=".9"/>
+          <rect x="22" y="70" width="44" height="6" rx="3" fill="#56637f"/>
+          <rect x="22" y="100" width="60" height="16" rx="5" fill="#9b6dff"/>
+          <circle cx="52" cy="152" r="10" fill="none" stroke="#9b6dff" stroke-width="2.5"/>
+        </g>
+      </g>
+
+      <!-- Tarjeta de crédito -->
+      <g class="float d2">
+        <g transform="translate(176 26) rotate(12)">
+          <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#gCard)"/>
+          <rect x="16" y="30" width="28" height="22" rx="4" fill="#ffd79a"/>
+          <path d="M16 41h28M30 30v22" stroke="#d99a3a" stroke-width="1.5"/>
+          <rect x="16" y="70" width="90" height="7" rx="3.5" fill="#fff" opacity=".75"/>
+          <circle cx="128" cy="76" r="11" fill="#fff" opacity=".45"/><circle cx="140" cy="76" r="11" fill="#fff" opacity=".7"/>
+          <g stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round">
+            <path d="M126 22a10 10 0 0 1 0 16"/><path d="M134 16a18 18 0 0 1 0 28"/>
+          </g>
+        </g>
+      </g>
+
+      <!-- Getnet: Smart POS mostrando "Aprobado" (naranja) -->
+      <g class="float">
+        <g transform="translate(232 150) rotate(7)">
+          <rect x="0" y="0" width="140" height="262" rx="22" fill="url(#gBody)" stroke="#ff7a1a" stroke-width="2.5"/>
+          <rect x="14" y="18" width="112" height="176" rx="10" fill="url(#gScreen)"/>
+          <rect x="28" y="32" width="50" height="7" rx="3.5" fill="#ff7a1a"/>
+          <text x="70" y="88" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="25" font-weight="800" fill="#ffffff">$12.990</text>
+          <circle cx="70" cy="128" r="20" fill="#22c55e"/>
+          <path d="M60 128l7 7 13-14" stroke="#fff" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <text x="70" y="174" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="13" font-weight="700" fill="#86efac">APROBADO</text>
+          <rect x="44" y="216" width="52" height="16" rx="8" fill="#ff7a1a"/>
+        </g>
+      </g>
+
+      <!-- Transbank: POS de mesón con teclado y boleta (rojo) -->
+      <g class="float d2">
+        <g transform="translate(40 252) rotate(-6)">
+          <rect x="26" y="-44" width="96" height="62" rx="3" fill="#f4f6fb"/>
+          <path d="M38 -32h72M38 -22h50M38 -12h64M38 -2h40" stroke="#9aa4bc" stroke-width="3.5" stroke-linecap="round"/>
+          <rect x="0" y="0" width="150" height="236" rx="20" fill="url(#gBody)" stroke="#e5484d" stroke-width="2.5"/>
+          <rect x="14" y="-4" width="122" height="16" rx="6" fill="#e5484d"/>
+          <rect x="18" y="26" width="114" height="62" rx="8" fill="url(#gScreen)"/>
+          <rect x="30" y="40" width="44" height="7" rx="3.5" fill="#e5484d"/>
+          <rect x="30" y="56" width="80" height="11" rx="3" fill="#e8eefc" opacity=".9"/>
+          <g fill="#2c3a68">
+            <rect x="22" y="104" width="30" height="22" rx="6"/><rect x="60" y="104" width="30" height="22" rx="6"/><rect x="98" y="104" width="30" height="22" rx="6"/>
+            <rect x="22" y="134" width="30" height="22" rx="6"/><rect x="60" y="134" width="30" height="22" rx="6"/><rect x="98" y="134" width="30" height="22" rx="6"/>
+            <rect x="22" y="164" width="30" height="22" rx="6"/><rect x="60" y="164" width="30" height="22" rx="6"/><rect x="98" y="164" width="30" height="22" rx="6"/>
+          </g>
+          <rect x="22" y="194" width="30" height="22" rx="6" fill="#e5484d"/><rect x="60" y="194" width="30" height="22" rx="6" fill="#2c3a68"/><rect x="98" y="194" width="30" height="22" rx="6" fill="#22c55e"/>
+        </g>
+      </g>
+
+      <!-- Mercado Pago: lector Point sin contacto (celeste) -->
+      <g class="float d3">
+        <g transform="translate(262 404) rotate(-8)">
+          <rect x="0" y="0" width="112" height="104" rx="26" fill="#00a8e8"/>
+          <rect x="6" y="6" width="100" height="92" rx="22" fill="none" stroke="#7fdcff" stroke-width="1.5" opacity=".6"/>
+          <g stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round">
+            <path class="onda" d="M44 38a16 16 0 0 1 0 28"/>
+            <path class="onda o2" d="M56 28a30 30 0 0 1 0 48"/>
+            <path class="onda o3" d="M68 18a44 44 0 0 1 0 68"/>
+          </g>
+          <circle cx="34" cy="52" r="5" fill="#fff"/>
+        </g>
+      </g>
+    </svg>
+  </div>
 
   <form class="card" id="loginForm">
     <div class="brand">
-      <h1>DATAMAULE</h1>
-      <div class="sub">{{ app_name }}</div>
-      <div class="bar"></div>
+      <div class="pos" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2.5"/><rect x="8" y="5" width="8" height="5" rx="1"/><path d="M8.5 14h.01M12 14h.01M15.5 14h.01M8.5 18h.01M12 18h.01M15.5 18h.01"/></svg>
+      </div>
+      <div>
+        <h1>DATAMAULE</h1>
+        <div class="sub">{{ app_name }}</div>
+      </div>
     </div>
     <h3>Bienvenido</h3>
     <p class="who">Panel de configuración{% if nombre_caja %} · Caja <b>{{ nombre_caja }}</b>{% endif %}</p>
@@ -1406,6 +1510,12 @@ LOGIN_HTML = """<!DOCTYPE html>
     <div class="secure">
       <svg width="18" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/></svg>
       <span>{% if primera_vez %}La clave de soporte solo funciona mientras la caja no tenga sucursal.{% else %}Acceso seguro: la ApiKey se valida con la intranet Datamaule.{% endif %} Solo disponible desde este equipo.</span>
+    </div>
+    <div class="brands" aria-label="Máquinas compatibles">
+      <span><i style="background:var(--tb)"></i>Transbank</span>
+      <span><i style="background:var(--gn)"></i>Getnet</span>
+      <span><i style="background:var(--mp)"></i>Mercado Pago</span>
+      <span><i style="background:var(--tuu)"></i>TUU</span>
     </div>
   </form>
 </main>
