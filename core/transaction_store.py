@@ -256,3 +256,41 @@ def _campo_de_respuestas(tipo, campo, excluir_tx_id, limite):
             if k.lower() == campo and v not in (None, "", 0, "0") and str(v).strip():
                 ids.add(str(v).strip())
     return ids
+
+
+def listar_historial(desde=None, hasta=None, tipo=None, estado=None, id_sucursal=None,
+                     nombre_caja=None, limite=200, offset=0):
+    """
+    Historial de ventas (solo lectura), de la más nueva a la más antigua.
+    desde/hasta: epoch en segundos (hasta es exclusivo). Los demás filtros son
+    opcionales. Devuelve (filas, total_que_coinciden, resumen_por_estado) donde
+    resumen = {estado: {"cantidad": n, "monto": suma}} sobre TODO el filtro,
+    no solo la página.
+    """
+    where, params = [], []
+    if desde is not None:
+        where.append("created_at >= ?"); params.append(float(desde))
+    if hasta is not None:
+        where.append("created_at < ?"); params.append(float(hasta))
+    if tipo:
+        where.append("tipo = ?"); params.append(_mayus(tipo))
+    if estado:
+        where.append("estado = ?"); params.append(_mayus(estado))
+    if id_sucursal not in (None, ""):
+        where.append("id_sucursal = ?"); params.append(str(id_sucursal).strip())
+    if nombre_caja:
+        where.append("nombre_caja = ?"); params.append(_mayus(nombre_caja))
+    cond = ("WHERE " + " AND ".join(where)) if where else ""
+    with _lock:
+        conn = _get_conn()
+        rows = conn.execute(
+            f"SELECT * FROM transacciones {cond} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, int(limite), int(offset)),
+        ).fetchall()
+        grupos = conn.execute(
+            f"SELECT estado, COUNT(*) AS n, COALESCE(SUM(monto), 0) AS m FROM transacciones {cond} GROUP BY estado",
+            params,
+        ).fetchall()
+    resumen = {g["estado"]: {"cantidad": g["n"], "monto": g["m"]} for g in grupos}
+    total = sum(v["cantidad"] for v in resumen.values())
+    return [_fila(r) for r in rows], total, resumen

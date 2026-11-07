@@ -256,6 +256,26 @@ PANEL_HTML = """<!DOCTYPE html>
   .tab-state { width: 6px; height: 6px; border-radius: 50%; background: #3a4566; margin-left: 2px; }
   .tab-state.on { background: var(--green); }
 
+  /* ── Historial de ventas ── */
+  .hv-filtros { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .hv-filtros label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+  .hv-resumen { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+  .hv-dia { margin-top: 6px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+            font-size: 13px; font-weight: 650; color: var(--text); padding: 8px 2px; border-bottom: 1px solid var(--border-2); }
+  .hv-dia span { font-weight: 500; color: var(--muted); font-size: 12px; }
+  .hv-tabla-wrap { overflow-x: auto; }
+  .hv-tabla { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .hv-tabla th { text-align: left; font-weight: 600; color: var(--muted); padding: 7px 8px; white-space: nowrap; }
+  .hv-tabla td { padding: 7px 8px; border-top: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+  .hv-tabla td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+  .hv-tabla td.mono { font-family: var(--mono); font-size: 11.5px; }
+  .hv-tabla tr.hv-fila { cursor: pointer; }
+  .hv-tabla tr.hv-fila:hover td { background: rgba(79,124,255,0.06); }
+  .hv-detalle td { white-space: normal; background: rgba(133,144,171,0.06); }
+  .hv-detalle pre { font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-all;
+                    max-height: 260px; overflow: auto; margin-top: 6px; color: var(--text-2); }
+  .hv-vacio { color: var(--muted); font-size: 13px; padding: 14px 2px; }
+
   /* ── Transacciones sin confirmar ── */
   .alert-card { border-color: rgba(245,165,36,0.45); }
   .alert-card .card-head { background: rgba(245,165,36,0.06); border-radius: var(--radius) var(--radius) 0 0; }
@@ -452,6 +472,7 @@ PANEL_HTML = """<!DOCTYPE html>
       <div class="sidenav-title">Estado</div>
       <a href="#resumen">Resumen</a>
       <a href="#pendientesCard" id="navPendientes" style="display:none;">Sin confirmar <span class="nav-count" id="navPendientesCount">0</span></a>
+      <a href="#sec-historial">Historial de ventas</a>
       <a href="#logs">Log reciente</a>
     </div>
     <div class="sidenav-group">
@@ -529,6 +550,49 @@ PANEL_HTML = """<!DOCTYPE html>
       </div>
       <div class="card-body">
         <div class="tx-list" id="pendientesBox"></div>
+      </div>
+    </section>
+
+    <!-- Historial de ventas (solo lectura) -->
+    <section class="card" id="sec-historial">
+      <div class="card-head" style="flex-wrap:wrap;">
+        <div>
+          <h2>Historial de ventas</h2>
+          <p>Todas las ventas enviadas a las máquinas, de la más nueva a la más antigua. Haga clic en una fila para ver el detalle completo.
+             Otros sistemas pueden obtener lo mismo en <code>GET /ventas</code> (con la clave de la API).</p>
+        </div>
+        <div class="head-right">
+          <button class="btn btn-secondary btn-sm" onclick="exportarHistorialCsv()">Descargar CSV</button>
+        </div>
+      </div>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:14px;">
+        <div class="hv-filtros">
+          <label>Desde <input type="date" class="param-val" id="hvDesde"></label>
+          <label>Hasta <input type="date" class="param-val" id="hvHasta"></label>
+          <label>Máquina
+            <select class="param-val" id="hvTipo">
+              <option value="">Todas</option>
+              <option value="transbank">Transbank</option>
+              <option value="getnet">Getnet</option>
+              <option value="mercadopago">Mercado Pago</option>
+              <option value="tuu">TUU</option>
+            </select>
+          </label>
+          <label>Estado
+            <select class="param-val" id="hvEstado">
+              <option value="">Todos</option>
+              <option value="APROBADO">Aprobado</option>
+              <option value="RECHAZADO">Rechazado</option>
+              <option value="ERROR">Error</option>
+              <option value="PENDIENTE">Pendiente</option>
+              <option value="INDETERMINADA">Indeterminada</option>
+            </select>
+          </label>
+          <button class="btn btn-primary btn-sm" onclick="loadHistorial(false)">Buscar</button>
+        </div>
+        <div class="hv-resumen" id="hvResumen"></div>
+        <div id="hvBox"><div class="hv-vacio">Cargando...</div></div>
+        <div class="actions"><button class="btn btn-secondary btn-sm" id="hvMas" style="display:none;" onclick="loadHistorial(true)">Cargar más</button></div>
       </div>
     </section>
 
@@ -1053,6 +1117,144 @@ async function aprobarConComprobante(txId, autorizacion) {
     showToast('Error aprobando', false);
   }
 }
+
+// ── Historial de ventas ──
+let hvVentas = [];
+let hvOffset = 0;
+const HV_LIMITE = 200;
+const HV_BADGE = { APROBADO: 'badge-green', RECHAZADO: 'badge-red', ERROR: 'badge-red',
+                   PENDIENTE: 'badge-blue', INDETERMINADA: 'badge-yellow' };
+
+function hvHoy() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function hvParams(offset, limite) {
+  const p = new URLSearchParams();
+  const v = id => document.getElementById(id).value;
+  if (v('hvDesde')) p.set('desde', v('hvDesde'));
+  if (v('hvHasta')) p.set('hasta', v('hvHasta'));
+  if (v('hvTipo')) p.set('tipo', v('hvTipo'));
+  if (v('hvEstado')) p.set('estado', v('hvEstado'));
+  p.set('limite', limite); p.set('offset', offset);
+  return p;
+}
+
+function hvFechaLarga(iso) {
+  const [a, m, d] = iso.split('-').map(Number);
+  const s = new Date(a, m - 1, d).toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function hvEstadoBadge(v) {
+  let b = `<span class="badge ${HV_BADGE[v.estado] || ''}">${esc(v.estado)}</span>`;
+  if (v.cancelada) b += ` <span class="badge">Cancelada</span>`;
+  return b;
+}
+
+function renderHistorial(resumen, total) {
+  const box = document.getElementById('hvBox');
+  if (!hvVentas.length) {
+    box.innerHTML = '<div class="hv-vacio">No hay ventas para esos filtros.</div>';
+  } else {
+    const dias = {};
+    for (const v of hvVentas) (dias[v.fecha] = dias[v.fecha] || []).push(v);
+    box.innerHTML = Object.keys(dias).map(dia => {
+      const lista = dias[dia];
+      const ok = lista.filter(v => v.aprobada);
+      const montoOk = ok.reduce((s, v) => s + (Number(v.monto) || 0), 0);
+      return `
+        <div class="hv-dia">${esc(hvFechaLarga(dia))}
+          <span>${lista.length} venta(s) · ${ok.length} aprobada(s) · ${esc(fmtMonto(montoOk))} aprobado</span></div>
+        <div class="hv-tabla-wrap"><table class="hv-tabla">
+          <thead><tr><th>Enviada</th><th>Procesada</th><th>Máquina</th><th>Caja</th><th style="text-align:right">Monto</th>
+                     <th>Estado</th><th>Autorización</th><th>Transacción</th></tr></thead>
+          <tbody>${lista.map(v => {
+            const i = hvVentas.indexOf(v);
+            return `
+            <tr class="hv-fila" onclick="hvToggle(${i})">
+              <td class="mono">${esc(v.hora_envio || '-')}</td>
+              <td class="mono">${esc(v.hora_proceso || '-')}${v.duracion_segundos != null ? ` <span style="color:var(--muted)">(${esc(v.duracion_segundos)} s)</span>` : ''}</td>
+              <td><span class="brand-dot ${DOT_TIPO[v.tipo] || ''}"></span> ${esc(v.maquina)}</td>
+              <td>${esc(v.id_sucursal)}/${esc(v.nombre_caja)}</td>
+              <td class="num">${esc(fmtMonto(v.monto))}</td>
+              <td>${hvEstadoBadge(v)}</td>
+              <td class="mono">${esc(v.codigo_autorizacion ?? '-')}</td>
+              <td class="mono">${esc(v.transaction_id)}</td>
+            </tr>
+            <tr class="hv-detalle" id="hvDet${i}" style="display:none;"><td colspan="8">
+              <div class="tx-meta">
+                <span>Terminal <b>${esc(v.terminal_id ?? '-')}</b></span>
+                <span>Ticket <b>${esc(v.ticket ?? '-')}</b></span>
+                <span>Comprobante POS <b>${esc(v.comprobante_pos ?? '-')}</b></span>
+                <span>Tarjeta <b>${v.tarjeta_ultimos4 ? '**** ' + esc(v.tarjeta_ultimos4) : '-'}</b></span>
+                <span>Enviada <b>${esc(v.enviada_en ?? '-')}</b></span>
+                <span>Procesada <b>${esc(v.procesada_en ?? '-')}</b></span>
+                <span>Resuelta por <b>${esc(v.resuelto_por ?? '-')}</b></span>
+              </div>
+              ${v.nota ? `<div class="tx-note" style="margin-top:6px">${esc(v.nota)}</div>` : ''}
+              ${v.respuesta_pos ? `<pre>${esc(JSON.stringify(v.respuesta_pos, null, 2))}</pre>` : ''}
+            </td></tr>`;
+          }).join('')}</tbody>
+        </table></div>`;
+    }).join('');
+  }
+  const pe = resumen.por_estado || {};
+  document.getElementById('hvResumen').innerHTML =
+    `<span class="badge">${esc(total)} venta(s)</span>` +
+    `<span class="badge badge-green">${esc(resumen.cantidad_aprobadas)} aprobada(s) · ${esc(fmtMonto(resumen.monto_aprobado))}</span>` +
+    Object.keys(pe).filter(k => k !== 'APROBADO').map(k =>
+      `<span class="badge ${HV_BADGE[k] || ''}">${esc(pe[k].cantidad)} ${esc(k.toLowerCase())}</span>`).join('');
+}
+
+function hvToggle(i) {
+  const fila = document.getElementById('hvDet' + i);
+  if (fila) fila.style.display = fila.style.display === 'none' ? '' : 'none';
+}
+
+async function loadHistorial(mas) {
+  const desde = document.getElementById('hvDesde');
+  const hasta = document.getElementById('hvHasta');
+  if (!desde.value && !hasta.value) { desde.value = hvHoy(); hasta.value = hvHoy(); }
+  if (!mas) { hvVentas = []; hvOffset = 0; }
+  try {
+    const r = await fetch('/panel/ventas?' + hvParams(hvOffset, HV_LIMITE), { cache: 'no-store' });
+    const j = await r.json();
+    if (!j.ok) { showToast(j.error || 'No se pudo cargar el historial', false); return; }
+    hvVentas = hvVentas.concat(j.ventas);
+    hvOffset += j.devueltas;
+    renderHistorial(j.resumen, j.total);
+    document.getElementById('hvMas').style.display = j.hay_mas ? '' : 'none';
+  } catch (e) {
+    document.getElementById('hvBox').innerHTML = '<div class="hv-vacio">No se pudo cargar el historial.</div>';
+  }
+}
+
+async function exportarHistorialCsv() {
+  try {
+    let todas = [], offset = 0, j;
+    do {
+      const r = await fetch('/panel/ventas?' + hvParams(offset, 1000), { cache: 'no-store' });
+      j = await r.json();
+      if (!j.ok) { showToast(j.error || 'No se pudo exportar', false); return; }
+      todas = todas.concat(j.ventas); offset += j.devueltas;
+    } while (j.hay_mas && j.devueltas);
+    const cols = ['fecha', 'hora_envio', 'hora_proceso', 'duracion_segundos', 'maquina', 'terminal_id', 'id_sucursal',
+                  'nombre_caja', 'monto', 'estado', 'cancelada', 'codigo_autorizacion', 'comprobante_pos',
+                  'tarjeta_ultimos4', 'ticket', 'transaction_id', 'resuelto_por', 'nota'];
+    const celda = x => '"' + String(x ?? '').replace(/"/g, '""') + '"';
+    const csv = [cols.join(';')].concat(todas.map(v => cols.map(c => celda(v[c])).join(';'))).join('\\r\\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['\\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `ventas_${j.filtros.desde || ''}_${j.filtros.hasta || ''}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) {
+    showToast('No se pudo exportar el historial', false);
+  }
+}
+loadHistorial(false);
 
 // ── Log ──
 let currentLogTab = 'general';

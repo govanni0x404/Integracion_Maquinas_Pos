@@ -44,6 +44,7 @@ from core import intranet
 from server.panel_html import PANEL_HTML, LOGIN_HTML
 from pos.pos_module import POSModule
 from core import transaction_store as tx_store
+from server import historial
 # _http_json se referencia por este nombre de módulo: los tests lo reemplazan acá.
 from core.puertos_com import vincular as vincular_puertos
 from core.http_util import http_json as _http_json, error_de_red_ambiguo as _error_de_red_ambiguo
@@ -1270,6 +1271,28 @@ class APIServer:
                 return jsonify({"ok": True, "pendientes": pendientes})
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e), "pendientes": []}), 500
+
+        # ── Historial de ventas (solo lectura) ──
+        def _historial_json():
+            try:
+                return jsonify(historial.consultar(request.args))
+            except ValueError as e:
+                return jsonify({"ok": False, "error": str(e)}), 400
+            except Exception:
+                logger.exception("Error consultando el historial de ventas")
+                return jsonify({"ok": False, "error": "Error interno consultando el historial"}), 500
+
+        @app.route("/panel/ventas", methods=["GET"])
+        def panel_ventas():
+            """Historial de ventas para el panel (sesión del panel)."""
+            return _historial_json()
+
+        @app.route("/ventas", methods=["GET"])
+        @require_basic_auth
+        def http_ventas():
+            """Historial de ventas para otros sistemas (misma clave Basic que /pago).
+            Parámetros: desde, hasta (AAAA-MM-DD), tipo, estado, id_sucursal, nombre_caja, limite, offset."""
+            return _historial_json()
 
         @app.route("/panel/pendientes/<tx_id>/reconciliar", methods=["POST"])
         def panel_pendientes_reconciliar(tx_id):
