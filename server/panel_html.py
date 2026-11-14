@@ -1681,27 +1681,25 @@ LOGIN_HTML = """<!DOCTYPE html>
     <h3>Bienvenido</h3>
     <p class="who">Panel de configuración{% if nombre_caja %} · Caja <b>{{ nombre_caja }}</b>{% endif %}</p>
 
-    {% if primera_vez %}
+    {% if not id_sucursal %}
     <div class="first">
       <strong>Primera configuración</strong>
-      Esta caja aún no tiene sucursal asignada. Ingrese con la clave de soporte y configure el
-      <b>ID de sucursal</b>. Después, el panel se abrirá solo con la ApiKey del cliente.
+      Esta caja aún no tiene sucursal asignada. Ingrese la ApiKey del cliente: la sucursal se
+      toma de la intranet y queda guardada en esta caja.
     </div>
     {% endif %}
-    <label class="lbl" for="password">{% if primera_vez %}Clave de soporte{% else %}ApiKey del cliente{% endif %}</label>
+    <label class="lbl" for="password">ApiKey del cliente</label>
     <div class="field">
       <span class="ico" aria-hidden="true">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M17 6l3 3M14.5 8.5l2 2"/></svg>
       </span>
-      <input type="password" id="password" placeholder="{% if primera_vez %}Ingrese la clave de soporte{% else %}Ingrese la ApiKey{% endif %}"
+      <input type="password" id="password" placeholder="Ingrese la ApiKey"
              autocomplete="off" spellcheck="false" autofocus required>
       <button type="button" class="eye" id="eye" title="Mostrar / ocultar">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
     </div>
-    {% if not primera_vez %}
-    <p class="hint">La ApiKey de la conexión «API PAGO ELECTRONICO» de la sucursal {{ id_sucursal }} en la intranet.</p>
-    {% endif %}
+    <p class="hint">La ApiKey de la conexión «API PAGO ELECTRONICO»{% if id_sucursal %} de la sucursal {{ id_sucursal }}{% endif %} en la intranet.</p>
 
     <button type="submit" class="btn" id="btn">
       <span id="btnTxt">Ingresar</span>
@@ -1711,7 +1709,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 
     <div class="secure">
       <svg width="18" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/></svg>
-      <span>{% if primera_vez %}La clave de soporte solo funciona mientras la caja no tenga sucursal.{% else %}Acceso seguro: la ApiKey se valida con la intranet Datamaule.{% endif %} Solo disponible desde este equipo.</span>
+      <span>Acceso seguro: la ApiKey se valida con la intranet Datamaule. Solo disponible desde este equipo.</span>
     </div>
     <div class="brands" aria-label="Máquinas compatibles">
       <span><i style="background:var(--tb)"></i>Transbank</span>
@@ -1723,7 +1721,6 @@ LOGIN_HTML = """<!DOCTYPE html>
 </main>
 
 <script>
-const soporte = {{ 'true' if primera_vez else 'false' }};
 const inp = document.getElementById('password');
 document.getElementById('eye').addEventListener('click', () => {
   inp.type = inp.type === 'password' ? 'text' : 'password';
@@ -1734,14 +1731,27 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
   const btn = document.getElementById('btn'), txt = document.getElementById('btnTxt'), err = document.getElementById('err');
   const valor = inp.value;
   btn.disabled = true; err.textContent = '';
-  txt.textContent = soporte ? 'Ingresando…' : 'Validando con la intranet…';
+  txt.textContent = 'Validando con la intranet…';
   try {
     const r = await fetch('/panel/login', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(soporte ? { password: valor } : { apikey: valor.trim() })
+      body: JSON.stringify({ apikey: valor.trim() })
     });
     const j = await r.json().catch(() => ({}));
-    if (j.ok) { location.reload(); return; }
+    if (j.ok && j.reinicio) {
+      // El servicio se reinicia para usar la sucursal del .env: se espera a que vuelva.
+      txt.textContent = (j.aviso ? j.aviso + ' ' : '') + 'Reiniciando el servicio…';
+      await new Promise(res => setTimeout(res, 3000));
+      for (let i = 0; i < 30; i++) {
+        try { const p = await fetch('/panel', {cache: 'no-store'}); if (p.ok) break; } catch (_) {}
+        await new Promise(res => setTimeout(res, 1000));
+      }
+      location.reload(); return;
+    }
+    if (j.ok) {
+      if (j.aviso) { txt.textContent = j.aviso; await new Promise(res => setTimeout(res, 1500)); }
+      location.reload(); return;
+    }
     err.textContent = j.error || 'No se pudo ingresar';
     inp.select();
   } catch (_) {

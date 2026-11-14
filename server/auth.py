@@ -7,7 +7,7 @@ from collections import deque
 from functools import lru_cache, wraps
 from urllib.parse import urlsplit
 from flask import request, Response, jsonify
-from config.settings import API_AUTH_USER, API_AUTH_PASS_HASH, PANEL_PASS_HASH
+from config.settings import API_AUTH_USER, API_AUTH_PASS_HASH
 from core.logging_config import logger as _log
 
 LOOPBACK_ADDRS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
@@ -32,10 +32,6 @@ def _password_matches(pwd: str) -> bool:
     """Compara la clave recibida contra API_AUTH_PASS_HASH (PBKDF2-SHA256).
     Se cachea porque PBKDF2 es lento a propósito y los clientes repiten la misma clave."""
     return _hash_coincide(pwd, API_AUTH_PASS_HASH)
-
-
-def _panel_password_matches(pwd: str) -> bool:
-    return _hash_coincide(pwd, PANEL_PASS_HASH)
 
 
 class LimitadorClave:
@@ -147,24 +143,16 @@ class FrenoIntentos:
 
 MAX_FALLOS = 10
 _limitador_api = LimitadorClave("API", lambda p: _password_matches(p), max_fallos=MAX_FALLOS)
-_limitador_panel = LimitadorClave("Panel", lambda p: _panel_password_matches(p), max_fallos=5)
 freno_apikey_panel = FrenoIntentos()
 
 
 def _reiniciar_bloqueo():
     _limitador_api.reiniciar()
-    _limitador_panel.reiniciar()
     freno_apikey_panel.reiniciar()
 
 
 def _clave_valida(pwd: str) -> bool:
     return _limitador_api.valida(pwd)
-
-
-def clave_panel_valida(pwd: str) -> bool:
-    if not PANEL_PASS_HASH:
-        return False
-    return _limitador_panel.valida(pwd or "")
 
 
 def check_basic_auth_header(auth_header: str) -> bool:

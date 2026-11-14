@@ -4,7 +4,9 @@ Validación de la ApiKey del cliente contra la intranet (api/Conexiones).
 Cada cliente que usa ApiPago tiene en la intranet una conexión del software
 API PAGO ELECTRONICO con su ApiKey. El panel de control acepta esa ApiKey como
 clave de ingreso: se consulta a la intranet con el ID_SUCURSAL de esta caja y
-solo se entra si la intranet confirma que la ApiKey es vigente para ella.
+solo se entra si la intranet confirma que la ApiKey es vigente para ella. Si la
+caja todavía no tiene sucursal se manda id_sucursal=0 y la intranet responde a
+qué sucursal pertenece la ApiKey (el panel la guarda en el .env).
 
 Respaldo sin conexión: cuando la intranet aprueba una ApiKey se guarda SOLO su
 hash (PBKDF2) en data/panel_apikey.json. Si después la intranet no responde, se
@@ -95,7 +97,7 @@ def consultar_conexiones(url: str, id_software: int, api_key: str, id_sucursal: 
             sucursal_intranet = int(data.get("id_sucursal") or 0)
         except (TypeError, ValueError):
             sucursal_intranet = 0
-        if sucursal_intranet and sucursal_intranet != id_sucursal:
+        if id_sucursal > 0 and sucursal_intranet and sucursal_intranet != id_sucursal:
             return _resultado(NO_COINCIDE, f"La ApiKey es de la sucursal {sucursal_intranet}, "
                                            f"no de esta caja (sucursal {id_sucursal}).")
         return {"estado": VALIDA, "mensaje": "Clave técnica correcta.",

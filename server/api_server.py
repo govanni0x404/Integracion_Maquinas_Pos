@@ -38,7 +38,7 @@ from config.settings import (
     TUU_DISPOSITIVOS,
     ALLOW_TUU_KEY_IN_REQUEST,
 )
-from server.auth import require_basic_auth, check_basic_auth_header, check_local_panel_request, clave_panel_valida
+from server.auth import require_basic_auth, check_basic_auth_header, check_local_panel_request
 from server.auth import freno_apikey_panel
 from core import intranet
 from server.panel_html import PANEL_HTML, LOGIN_HTML
@@ -135,13 +135,67 @@ def _clave_sesion_panel():
         return os.urandom(32)
 
 
-def _id_sucursal_configurada():
-    """ID_SUCURSAL como entero; 0 si la caja todavía no tiene sucursal (primera
-    configuración). Mientras sea 0 se permite la clave de soporte."""
+def _a_sucursal(valor):
+    """ID de sucursal como entero; 0 si está vacío o no es un número."""
     try:
-        return max(0, int(str(ID_SUCURSAL).strip()))
+        return max(0, int(str(valor or "").strip()))
     except ValueError:
         return 0
+
+
+def _id_sucursal_configurada():
+    """ID_SUCURSAL con el que arrancó el servicio; 0 si la caja no tiene sucursal."""
+    return _a_sucursal(ID_SUCURSAL)
+
+
+def _id_sucursal_del_env():
+    """ID_SUCURSAL que dice el .env AHORA (puede haberse editado a mano después
+    de arrancar). Sin .env se usa el valor con el que arrancó el servicio."""
+    ruta = _env_en_uso()
+    if not ruta:
+        return _id_sucursal_configurada()
+    try:
+        for linea in ruta.read_text(encoding="utf-8").splitlines():
+            linea = linea.strip()
+            if linea and not linea.startswith("#") and "=" in linea:
+                k, _, v = linea.partition("=")
+                if k.strip() == "ID_SUCURSAL":
+                    return _a_sucursal(v.strip().strip('"').strip("'"))
+    except Exception as e:
+        logger.warning("No se pudo leer ID_SUCURSAL del .env: %s", e)
+        return _id_sucursal_configurada()
+    return 0
+
+
+def _guardar_id_sucursal_en_env(id_sucursal):
+    """Escribe ID_SUCURSAL=<id> en el .env en uso. Solo cambia esa línea (o la
+    agrega al final si no estaba); el resto del archivo queda igual."""
+    import os
+    ruta = _env_en_uso()
+    if not ruta:
+        return False
+    try:
+        lineas = ruta.read_text(encoding="utf-8").splitlines(keepends=True)
+        nuevas, puesta = [], False
+        for linea in lineas:
+            limpia = linea.strip()
+            if (not puesta and limpia and not limpia.startswith("#") and "=" in limpia
+                    and limpia.split("=", 1)[0].strip() == "ID_SUCURSAL"):
+                nuevas.append(f"ID_SUCURSAL={id_sucursal}\n")
+                puesta = True
+            else:
+                nuevas.append(linea)
+        if not puesta:
+            if nuevas and not nuevas[-1].endswith("\n"):
+                nuevas[-1] += "\n"
+            nuevas.append(f"ID_SUCURSAL={id_sucursal}\n")
+        tmp = ruta.with_name(ruta.name + ".tmp")
+        tmp.write_text("".join(nuevas), encoding="utf-8")
+        os.replace(tmp, ruta)
+        return True
+    except Exception as e:
+        logger.error("No se pudo guardar ID_SUCURSAL=%s en el .env: %s", id_sucursal, e)
+        return False
 
 
 # Rutas del panel que se pueden usar sin haber ingresado la clave.
@@ -955,34 +1009,23 @@ class APIServer:
         def panel_login():
             data = request.get_json(force=True, silent=True)
             data = data if isinstance(data, dict) else {}
-            if "apikey" in data:
-                return _login_con_apikey(str(data.get("apikey") or "").strip())
-            if _id_sucursal_configurada():
-                # Solo para la primera configuración: con la sucursal asignada se entra con la ApiKey.
-                logger.warning("[PANEL] Intento con clave de soporte rechazado: la caja ya tiene sucursal")
-                return jsonify({"ok": False, "error": "La clave de soporte solo se usa en la primera "
-                                                      "configuración: ingrese con la ApiKey"}), 403
-            if not clave_panel_valida(str(data.get("password") or "")):
-                logger.warning("[PANEL] Clave de soporte incorrecta")
-                return jsonify({"ok": False, "error": "Clave incorrecta"}), 401
-            _abrir_sesion_panel("soporte")
-            logger.info("[PANEL] Ingreso al panel de control (clave de soporte)")
-            return jsonify({"ok": True})
+            return _login_con_apikey(str(data.get("apikey") or "").strip())
 
         def _login_con_apikey(api_key):
-            """Valida la ApiKey del cliente contra la intranet (api/Conexiones) con
-            el ID_SUCURSAL de esta caja. Sin respuesta de la intranet se acepta la
-            última ApiKey que ésta aprobó (se guarda solo su hash)."""
+            """Valida la ApiKey del cliente contra la intranet (api/Conexiones).
+            - .env con ID_SUCURSAL: la ApiKey tiene que ser de esa sucursal.
+            - .env sin ID_SUCURSAL (caja recién instalada): la intranet dice de qué
+              sucursal es la ApiKey y ese número se guarda en el .env.
+            Si el ID_SUCURSAL del .env no es el que usa el servicio, se reinicia
+            para que lo tome. Sin respuesta de la intranet se acepta la última
+            ApiKey que ésta aprobó (se guarda solo su hash)."""
             from config import settings as cfg
             if not api_key:
                 return jsonify({"ok": False, "error": "Ingrese la ApiKey"}), 400
             espera = freno_apikey_panel.espera()
             if espera:
                 return jsonify({"ok": False, "error": f"Demasiados intentos: espere {espera} s"}), 429
-            id_sucursal = _id_sucursal_configurada()
-            if id_sucursal <= 0:
-                return jsonify({"ok": False, "error": "Esta caja no tiene ID_SUCURSAL configurado: "
-                                                      "ingrese con la clave de soporte"}), 400
+            id_sucursal = _id_sucursal_del_env()
 
             respaldo = cfg.DATA_DIR / "panel_apikey.json"
             pista = f"...{api_key[-4:]}" if len(api_key) > 8 else "(corta)"
@@ -991,11 +1034,45 @@ class APIServer:
             estado = r.get("estado")
 
             if estado == intranet.VALIDA:
+                nueva = 0
+                if id_sucursal <= 0:
+                    nueva = _a_sucursal(r.get("id_sucursal"))
+                    if nueva <= 0:
+                        logger.warning("[PANEL] La intranet aprobó la ApiKey %s pero no dijo su sucursal", pista)
+                        return jsonify({"ok": False, "error": "La intranet no indicó la sucursal de esta ApiKey: "
+                                                              "escriba el ID_SUCURSAL en el .env"}), 502
+                    if not _guardar_id_sucursal_en_env(nueva):
+                        return jsonify({"ok": False, "error": "No se pudo guardar el ID de sucursal en el .env"}), 500
+                    logger.info("[PANEL] ID_SUCURSAL=%s guardado en el .env (tomado de la ApiKey %s)", nueva, pista)
+                    id_sucursal = nueva
                 intranet.guardar_respaldo(respaldo, api_key, id_sucursal)
                 _abrir_sesion_panel("apikey")
                 logger.info("[PANEL] Ingreso al panel con ApiKey %s validada por la intranet (sucursal %s)",
                             pista, id_sucursal)
-                return jsonify({"ok": True})
+                resp = {"ok": True}
+                if nueva:
+                    resp["aviso"] = f"Sucursal {nueva} guardada en esta caja."
+                if id_sucursal != _id_sucursal_configurada():
+                    # El servicio arrancó con otra sucursal (o ninguna): se reinicia para usar la del .env.
+                    if _programar_reinicio("cambio de ID_SUCURSAL a %s" % id_sucursal):
+                        resp["reinicio"] = True
+                    else:
+                        resp["aviso"] = (resp.get("aviso", "") + " Hay una venta en curso: reinicie el servicio "
+                                         "cuando termine para usar la sucursal nueva.").strip()
+                return jsonify(resp)
+
+            if id_sucursal <= 0:
+                # Caja sin sucursal: no hay respaldo local posible, hace falta la intranet.
+                freno_apikey_panel.fallo()
+                if estado == intranet.PIDE_SUCURSAL:
+                    msg = "La ApiKey está en más de una sucursal: escriba el ID_SUCURSAL en el .env y vuelva a ingresar."
+                elif estado == intranet.NO_DISPONIBLE:
+                    msg = f"{r.get('mensaje')} La primera vez se necesita la intranet para saber la sucursal."
+                else:
+                    msg = r.get("mensaje") or "ApiKey no válida"
+                logger.warning("[PANEL] ApiKey %s rechazada en caja sin sucursal (%s): %s", pista, estado, r.get("mensaje"))
+                codigo = 429 if estado == intranet.BLOQUEADA else 503 if estado == intranet.NO_DISPONIBLE else 401
+                return jsonify({"ok": False, "error": msg}), codigo
 
             if estado == intranet.NO_DISPONIBLE and r.get("sin_respuesta"):
                 validada = intranet.respaldo_coincide(respaldo, api_key, id_sucursal)
@@ -1072,9 +1149,8 @@ class APIServer:
                 USAR_POS_FISICO, USAR_GETNET, MAX_TRANSACTION_TIME, TIMEOUT_SERVER
             )
             if not session.get("panel_ok"):
-                sucursal = _id_sucursal_configurada()
                 return render_template_string(LOGIN_HTML, app_name=APP_NAME, nombre_caja=NOMBRE_CAJA,
-                                              id_sucursal=sucursal, primera_vez=not sucursal)
+                                              id_sucursal=_id_sucursal_del_env())
 
             # Buscar .env — en --onefile el .env está junto al .exe
             env_path = str(_env_en_uso() or "") or None
@@ -1506,9 +1582,16 @@ class APIServer:
         def panel_restart():
             """Reinicia el servicio relanzando el propio proceso (.exe compilado o python app.py).
             Con una venta en curso no se reinicia: cortaría la venta a la mitad."""
-            if _venta_en_curso():
+            if not _programar_reinicio("pedido desde el panel"):
                 logger.warning("Reinicio vía panel rechazado: hay una venta en curso")
                 return jsonify({"ok": False, "error": "Hay una venta en curso: espere a que termine para reiniciar"}), 409
+            return jsonify({"ok": True, "message": "Reiniciando..."}), 200
+
+        def _programar_reinicio(motivo):
+            """Relanza el propio proceso (.exe compilado o python app.py) en 2 s.
+            Devuelve False sin hacer nada si hay una venta en curso."""
+            if _venta_en_curso():
+                return False
             import sys
             import platform
             import subprocess
@@ -1547,9 +1630,9 @@ class APIServer:
                 finally:
                     os.kill(os.getpid(), signal.SIGTERM)
 
-            logger.info("Reinicio vía panel: relanzando %s", cmd)
+            logger.info("Reinicio (%s): relanzando %s", motivo, cmd)
             threading.Thread(target=_relaunch, daemon=True).start()
-            return jsonify({"ok": True, "message": "Reiniciando..."}), 200
+            return True
 
         @app.route("/register_agent", methods=["POST"])
         @require_basic_auth

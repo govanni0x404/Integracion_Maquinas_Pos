@@ -198,12 +198,94 @@ def test_intranet_bloqueada_429(client_sin_sesion, intranet_responde):
     assert r.status_code == 429 and "40" in r.get_json()["error"]
 
 
-def test_sin_id_sucursal_pide_clave_de_soporte(client_sin_sesion, intranet_responde, monkeypatch):
+@pytest.fixture
+def env_sin_sucursal(monkeypatch, tmp_path):
+    """Caja recién instalada: el .env trae ID_SUCURSAL vacío."""
     from server import api_server
+    env = tmp_path / ".env"
+    env.write_text("HTTP_PORT=5005\nID_SUCURSAL=\nNOMBRE_CAJA=CAJA_TEST\n", encoding="utf-8")
+    monkeypatch.setattr(api_server, "_env_en_uso", lambda: env)
     monkeypatch.setattr(api_server, "ID_SUCURSAL", "")
+    return env
+
+
+@pytest.fixture
+def reinicios(monkeypatch):
+    """No relanza el proceso de verdad: anota los reinicios pedidos."""
+    import threading
+    lanzados = []
+    monkeypatch.setattr(threading, "Thread",
+                        lambda *a, **kw: lanzados.append(kw) or type("T", (), {"start": lambda s: None})())
+    return lanzados
+
+
+def test_sin_sucursal_la_toma_de_la_apikey_y_la_guarda(client_sin_sesion, intranet_responde,
+                                                       env_sin_sucursal, reinicios):
+    intranet_responde.responder({"estado": intranet.VALIDA, "mensaje": "ok", "id_sucursal": 100,
+                                 "conexiones": CONEXION})
     r = _login(client_sin_sesion)
-    assert r.status_code == 400 and "soporte" in r.get_json()["error"]
-    assert intranet_responde == []
+    j = r.get_json()
+    assert r.status_code == 200 and j["ok"] and j["reinicio"] and "100" in j["aviso"]
+    assert intranet_responde[0]["id_sucursal"] == 0
+    # Solo cambia la línea de ID_SUCURSAL
+    assert env_sin_sucursal.read_text(encoding="utf-8") == "HTTP_PORT=5005\nID_SUCURSAL=100\nNOMBRE_CAJA=CAJA_TEST\n"
+    assert len(reinicios) == 1
+    assert intranet.respaldo_coincide(RESPALDO, KEY, 100)
+
+
+def test_sin_linea_id_sucursal_la_agrega(client_sin_sesion, intranet_responde, env_sin_sucursal, reinicios):
+    env_sin_sucursal.write_text("NOMBRE_CAJA=CAJA_TEST", encoding="utf-8")
+    intranet_responde.responder({"estado": intranet.VALIDA, "mensaje": "ok", "id_sucursal": 100,
+                                 "conexiones": CONEXION})
+    assert _login(client_sin_sesion).status_code == 200
+    assert env_sin_sucursal.read_text(encoding="utf-8") == "NOMBRE_CAJA=CAJA_TEST\nID_SUCURSAL=100\n"
+
+
+def test_sin_sucursal_y_apikey_mala_no_toca_el_env(client_sin_sesion, intranet_responde, env_sin_sucursal, reinicios):
+    antes = env_sin_sucursal.read_text(encoding="utf-8")
+    intranet_responde.responder({"estado": intranet.NO_COINCIDE, "mensaje": "no corresponde", "conexiones": []})
+    assert _login(client_sin_sesion).status_code == 401
+    assert env_sin_sucursal.read_text(encoding="utf-8") == antes and reinicios == []
+
+
+@pytest.mark.parametrize("respuesta,codigo,texto", [
+    ({"estado": intranet.NO_DISPONIBLE, "mensaje": "Sin conexión.", "sin_respuesta": True}, 503, "primera vez"),
+    ({"estado": intranet.PIDE_SUCURSAL, "mensaje": "varias"}, 401, "más de una sucursal"),
+    ({"estado": intranet.VALIDA, "mensaje": "ok"}, 502, "no indicó la sucursal"),
+])
+def test_sin_sucursal_casos_sin_respuesta_clara(client_sin_sesion, intranet_responde, env_sin_sucursal,
+                                                reinicios, respuesta, codigo, texto):
+    antes = env_sin_sucursal.read_text(encoding="utf-8")
+    intranet_responde.responder({**respuesta, "conexiones": []})
+    r = _login(client_sin_sesion)
+    assert r.status_code == codigo and texto in r.get_json()["error"]
+    assert env_sin_sucursal.read_text(encoding="utf-8") == antes and reinicios == []
+
+
+def test_env_editado_a_mano_se_valida_con_esa_sucursal(client_sin_sesion, intranet_responde,
+                                                       env_sin_sucursal, reinicios):
+    # El servicio arrancó con la sucursal 1 y después alguien puso 200 en el .env
+    from server import api_server
+    api_server.ID_SUCURSAL = "1"
+    env_sin_sucursal.write_text("ID_SUCURSAL=200\n", encoding="utf-8")
+    intranet_responde.responder({"estado": intranet.VALIDA, "mensaje": "ok", "id_sucursal": 200,
+                                 "conexiones": CONEXION})
+    r = _login(client_sin_sesion)
+    assert r.status_code == 200 and r.get_json()["reinicio"]
+    assert intranet_responde[0]["id_sucursal"] == 200
+    assert env_sin_sucursal.read_text(encoding="utf-8") == "ID_SUCURSAL=200\n"
+    assert len(reinicios) == 1
+
+
+def test_misma_sucursal_no_reinicia(client_sin_sesion, intranet_responde, reinicios):
+    r = _login(client_sin_sesion)
+    assert r.status_code == 200 and "reinicio" not in r.get_json() and reinicios == []
+
+
+def test_sin_sucursal_en_la_consulta_acepta_la_de_la_intranet(monkeypatch):
+    fake_urlopen(monkeypatch, body={"ok": True, "id_sucursal": 100, "conexiones": CONEXION})
+    r = intranet.consultar_conexiones(URL, 22, KEY, 0)
+    assert r["estado"] == intranet.VALIDA and r["id_sucursal"] == 100
 
 
 def test_apikey_vacia(client_sin_sesion, intranet_responde):
