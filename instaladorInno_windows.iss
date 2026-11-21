@@ -3,7 +3,7 @@
 ; Compilar este .iss desde la raíz del proyecto DESPUÉS de correr compilar_windows.bat.
 
 #define MyAppName "ApiPagoElectronico"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppExeName "ApiPagoElectronico.exe"
 ; Mismo nombre de valor que usa el panel (/panel/autostart) en HKCU\...\Run: APP_NAME de config/settings.py
 #define AutostartValueName " ApiPagoElectronico"

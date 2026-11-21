@@ -13,6 +13,7 @@ from flask_cors import CORS
 from config.settings import (
     APP_NAME,
     APP_VERSION,
+    MODO_SERVIDOR,
     ID_SUCURSAL,
     NOMBRE_CAJA,
     ID_TERMINAL,
@@ -73,6 +74,11 @@ GRACIA_REEMPLAZO_VENTA = 5
 
 NOTA_ABANDONADA = ("Abandonada: llegó una venta nueva a la misma caja y esta se dejó de esperar. "
                    "Se sigue reconciliando sola en segundo plano; si sale APROBADA queda una alerta para revisar.")
+
+# En MODO_SERVIDOR no hay máquinas por cable: solo se cobra por internet.
+TIPOS_POR_CABLE = ("getnet", "transbank")
+MENSAJE_SOLO_INTERNET = ("Este servicio corre en un servidor y solo atiende Mercado Pago y TUU. "
+                         "Las ventas Getnet y Transbank (máquinas por cable) se envían a la ApiPago de la caja.")
 
 # Medio de pago -> cómo se reconcilia una venta INDETERMINADA (monitor y panel).
 RESUELTO_POR_MONITOR = {"getnet": "Command 101", "transbank": "Última venta 0250",
@@ -1619,6 +1625,16 @@ class APIServer:
             else:
                 cmd = [exe, str(Path(sys.argv[0]).resolve())] + sys.argv[1:]
 
+            if MODO_SERVIDOR:
+                # En el servidor el proceso lo cuida systemd (Restart=always): basta con
+                # terminar; relanzarlo a mano dejaría un proceso fuera del servicio.
+                def _salir():
+                    time.sleep(2.0)
+                    os.kill(os.getpid(), signal.SIGTERM)
+                logger.info("Reinicio (%s): MODO_SERVIDOR, systemd vuelve a levantar el servicio", motivo)
+                threading.Thread(target=_salir, daemon=True).start()
+                return True
+
             def _relaunch():
                 time.sleep(2.0)
                 try:
@@ -1821,6 +1837,10 @@ class APIServer:
 
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "Es necesario el id_sucursal, nombre_caja y el tipo(type) de pos"}), 400
+
+            if MODO_SERVIDOR and pos_type in TIPOS_POR_CABLE:
+                logger.warning("[HTTP /pago] type=%s rechazado: MODO_SERVIDOR solo atiende Mercado Pago y TUU", pos_type)
+                return jsonify({"status": "no_disponible_en_servidor", "error": MENSAJE_SOLO_INTERNET}), 503
 
             custom_timeout = data.get("timeout")
             if custom_timeout:
@@ -2353,6 +2373,8 @@ class APIServer:
                 agents_count = sum(len(boxes) for boxes in self.agents.values())
             return jsonify({
                 "status": "ok",
+                "version": APP_VERSION,
+                "modo_servidor": MODO_SERVIDOR,
                 "port": HTTP_PORT,
                 "id_sucursal": ID_SUCURSAL,
                 "nombre_caja": NOMBRE_CAJA,
@@ -2494,6 +2516,8 @@ class APIServer:
 
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
+            if MODO_SERVIDOR and pos_type in TIPOS_POR_CABLE:
+                return jsonify({"status": "no_disponible_en_servidor", "error": MENSAJE_SOLO_INTERNET}), 503
             bloqueo = self.reemplazar_venta_anterior(id_sucursal, nombre_caja, transbank_log)
             if bloqueo:
                 return bloqueo

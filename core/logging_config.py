@@ -1,7 +1,8 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from config.settings import APP_NAME, LOG_RETENCION_DIAS, LOGS_DIR, LOG_FILE as LOG_FILE_SETTING, MIGRACION_INFO
+import sys
+from config.settings import APP_NAME, LOG_RETENCION_DIAS, LOGS_DIR, LOG_FILE as LOG_FILE_SETTING, MIGRACION_INFO, MODO_SERVIDOR
 from core.estructura import carpeta_de_log
 
 LOG_DIR = Path(LOGS_DIR)  # raíz: logs/ junto al .env
@@ -126,6 +127,15 @@ if not logger.handlers:
         fh.setFormatter(formatter)
         logger.addHandler(fh)
         logger.warning(f"No se pudo crear log en {LOG_DIR}: {e}. Usando {fallback_dir}")
+
+    if MODO_SERVIDOR:
+        # En el servidor systemd guarda la salida estándar: se ve con journalctl.
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+        logger.addHandler(sh)
+        # waitress configura el logger raíz al arrancar (basicConfig): sin esto
+        # cada línea saldría dos veces en journalctl.
+        logger.propagate = False
 
 logger.info(f"Logger inicializado — log de hoy: {current_log_file()}")
 for _m in MIGRACION_INFO.get("movidos", []):

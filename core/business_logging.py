@@ -11,8 +11,10 @@ una vista narrada aparte, pensada para revisar rápido "qué pasó" sin tener
 que interpretar JSON crudo ni tracebacks.
 """
 import logging
+import sys
 from pathlib import Path
 
+from config.settings import MODO_SERVIDOR
 from core.logging_config import DailyFileHandler, log_dir_for
 
 _loggers = {}
@@ -31,6 +33,10 @@ def _build_logger(nombre):
             fh = DailyFileHandler(Path.home(), nombre)
         fh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
         log.addHandler(fh)
+        if MODO_SERVIDOR:
+            sh = logging.StreamHandler(sys.stdout)  # también en journalctl
+            sh.setFormatter(logging.Formatter(f"[{nombre}] %(message)s"))
+            log.addHandler(sh)
 
     return log
 

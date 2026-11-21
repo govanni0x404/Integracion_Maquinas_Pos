@@ -1,0 +1,31 @@
+# Servicio de systemd: mantiene ApiPago (modo servidor) corriendo siempre.
+# Arranca solo al prender el servidor y se vuelve a levantar si se cae.
+# Se instala con deploy/servidor/instalar.sh (copia este archivo a /etc/systemd/system/).
+[Unit]
+Description=ApiPago Electronico (modo servidor: Mercado Pago y TUU)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apipago
+Group=apipago
+WorkingDirectory=/opt/apipago
+ExecStart=/opt/apipago/venv/bin/python /opt/apipago/servidor.py
+# Siempre: también cuando el panel pide "Guardar y reiniciar" (el proceso termina y systemd lo levanta).
+Restart=always
+RestartSec=5
+# Que los print/log salgan al instante en journalctl.
+Environment=PYTHONUNBUFFERED=1
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Seguridad: el servicio solo puede escribir en su propia carpeta.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/apipago
+
+[Install]
+WantedBy=multi-user.target

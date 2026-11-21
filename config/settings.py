@@ -158,7 +158,7 @@ APP_NAME = os.environ.get("APP_NAME", " ApiPagoElectronico")
 
 # Versión de la aplicación (se muestra en la esquina inferior del panel). Subirla en cada
 # entrega y mantenerla igual a MyAppVersion de instaladorInno_windows.iss.
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 
@@ -228,6 +228,12 @@ HTTP_PORT = int(os.environ.get("HTTP_PORT", os.environ.get("PORT", "5005")))
 # Interfaz donde escucha la API. 127.0.0.1 = solo esta PC (el navegador de la
 # caja llama a localhost): nadie de la red puede llegar. 0.0.0.0 = toda la red
 # (solo si otro equipo necesita llamar a esta caja).
+# MODO_SERVIDOR=true: la API corre en un servidor (Linux, como servicio de systemd)
+# en vez de la PC de la caja. Ahí no hay máquinas por cable, así que solo atiende
+# Mercado Pago y TUU (cobros por internet): Getnet y Transbank quedan apagados
+# aunque el .env diga lo contrario. Se arranca con servidor.py, no con app.py.
+MODO_SERVIDOR = os.environ.get("MODO_SERVIDOR", "false").lower() == "true"
+
 BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
 ESCUCHA_SOLO_LOCAL = BIND_HOST in ("127.0.0.1", "localhost", "::1")
 # Endpoints de agentes remotos (/register_agent, /poll, /result, /debug/queues).
@@ -247,7 +253,7 @@ TRANSBANK_TERMINAL_ID = os.environ.get("TRANSBANK_TERMINAL_ID", "").strip() or I
 GETNET_TERMINAL_ID = os.environ.get("GETNET_TERMINAL_ID", "").strip() or ID_TERMINAL
 
 # POS físico
-USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "false").lower() == "true"
+USAR_POS_FISICO = os.environ.get("USAR_POS_FISICO", "false").lower() == "true" and not MODO_SERVIDOR
 PUERTOS_COM = os.environ.get("PUERTOS_COM", "COM5,COM6,COM7,COM8")
 
 # Segundos máximos que una petición /pago Transbank queda abierta esperando que
@@ -291,7 +297,7 @@ ALLOWED_ORIGINS = [x.strip() for x in _allowed_origins_raw.split(",") if x.strip
 
 # GETNET POS
 # ¿Esta máquina tiene POS Getnet conectado?
-USAR_GETNET = os.environ.get("USAR_GETNET", "true").lower() == "true"
+USAR_GETNET = os.environ.get("USAR_GETNET", "true").lower() == "true" and not MODO_SERVIDOR
 # Puerto COM fijo para el POS Getnet (ej. "COM3"). Si se deja vacío, se
 # detecta automáticamente probando todos los puertos disponibles. Útil para
 # diagnosticar cuando el dispositivo expone varios puertos COM (USB
