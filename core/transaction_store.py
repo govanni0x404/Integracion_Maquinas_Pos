@@ -23,7 +23,16 @@ from config.settings import DB_FILE, APP_NAME
 
 logger = logging.getLogger(APP_NAME)
 
-ESTADOS_SIN_RESOLVER = ("PENDIENTE", "INDETERMINADA")
+# ABANDONADA: venta sin confirmar que se dejó de esperar porque llegó otra venta
+# a la misma caja después de su timeout. Sigue sin resolver (el monitor la sigue
+# reconciliando y se puede resolver desde el panel) pero YA NO bloquea la caja.
+ESTADOS_SIN_RESOLVER = ("PENDIENTE", "INDETERMINADA", "ABANDONADA")
+ESTADOS_BLOQUEAN_CAJA = ("PENDIENTE", "INDETERMINADA")
+
+NOTA_APROBADA_TRAS_ABANDONO = (
+    "⚠️ ATENCIÓN: esta venta se había abandonado para poder hacer otra, pero el POS la "
+    "confirmó APROBADA. Revisar que al cliente no se le haya cobrado dos veces."
+)
 
 _lock = threading.Lock()
 _conn = None
@@ -115,8 +124,20 @@ def registrar_intento(tx_id, tipo, ticket, terminal_id, id_sucursal, nombre_caja
 
 
 def actualizar_estado(tx_id, estado, raw_response=None, nota=None, resuelto_por=None):
+    """Una venta ABANDONADA no vuelve a PENDIENTE/INDETERMINADA (volvería a bloquear
+    la caja): solo sale de ahí con un resultado real. Si ese resultado es APROBADO
+    se deja la nota de alerta para revisar un posible doble cobro.
+    Devuelve el estado anterior (None si la transacción no existe)."""
     with _lock:
         conn = _get_conn()
+        row = conn.execute("SELECT estado FROM transacciones WHERE tx_id = ?", (tx_id,)).fetchone()
+        anterior = row["estado"] if row else None
+        if anterior == "ABANDONADA":
+            if estado in ESTADOS_BLOQUEAN_CAJA:
+                estado = "ABANDONADA"
+            elif estado == "APROBADO":
+                nota = f"{NOTA_APROBADA_TRAS_ABANDONO} {nota}" if nota else NOTA_APROBADA_TRAS_ABANDONO
+                logger.warning("tx=%s ABANDONADA resultó APROBADA: revisar posible doble cobro", tx_id)
         raw_json = json.dumps(raw_response, ensure_ascii=False, default=str) if raw_response is not None else None
         conn.execute(
             """
@@ -128,6 +149,7 @@ def actualizar_estado(tx_id, estado, raw_response=None, nota=None, resuelto_por=
             (estado, raw_json, nota, resuelto_por, time.time(), tx_id),
         )
         conn.commit()
+        return anterior
 
 
 def asignar_ticket(tx_id, ticket):
@@ -147,17 +169,18 @@ def obtener(tx_id):
 
 
 def hay_pendiente_sin_resolver(id_sucursal, nombre_caja):
-    """Devuelve el tx_id de la transacción más antigua sin resolver para esta caja, o None."""
+    """Devuelve el tx_id de la transacción más antigua que bloquea esta caja
+    (PENDIENTE o INDETERMINADA; una ABANDONADA no bloquea), o None."""
     with _lock:
         conn = _get_conn()
-        placeholders = ",".join("?" for _ in ESTADOS_SIN_RESOLVER)
+        placeholders = ",".join("?" for _ in ESTADOS_BLOQUEAN_CAJA)
         row = conn.execute(
             f"""
             SELECT tx_id FROM transacciones
             WHERE id_sucursal = ? AND nombre_caja = ? AND estado IN ({placeholders})
             ORDER BY created_at ASC LIMIT 1
             """,
-            (id_sucursal, _mayus(nombre_caja), *ESTADOS_SIN_RESOLVER),
+            (id_sucursal, _mayus(nombre_caja), *ESTADOS_BLOQUEAN_CAJA),
         ).fetchone()
         return row["tx_id"] if row else None
 

@@ -75,7 +75,9 @@ def test_venta_rechazada(client, fake_pos):
     assert tx_store.obtener(body["transaction_id"])["estado"] == "RECHAZADO"
 
 
-def test_indeterminada_bloquea_caja_hasta_resolver(client, fake_pos):
+def test_venta_nueva_reemplaza_a_la_indeterminada(client, fake_pos):
+    """Una venta sin confirmar ya no bloquea la caja: la nueva pasa y la anterior
+    queda ABANDONADA (el monitor la sigue reconciliando en segundo plano)."""
     fake_pos.behavior = lambda **kw: {"status": "indeterminada", "ticket": kw["ticket"]}
     body = client.post("/pago", json=VENTA, headers=AUTH).get_json()
     tx_id = body["transaction_id"]
@@ -84,13 +86,16 @@ def test_indeterminada_bloquea_caja_hasta_resolver(client, fake_pos):
 
     fake_pos.behavior = lambda **kw: {"status": "success"}
     r = client.post("/pago", json=VENTA, headers=AUTH)
-    assert r.status_code == 409
-    assert r.get_json()["pending_transaction_id"] == tx_id
-    assert len(fake_pos.calls) == 1  # no se le pidió nada al POS
+    assert r.status_code == 200 and r.get_json()["estado"] == "APROBADO"
+    assert len(fake_pos.calls) == 2
+    assert tx_store.obtener(tx_id)["estado"] == "ABANDONADA"
+    assert tx_id in [t["tx_id"] for t in tx_store.listar_no_resueltas()]
 
-    r = client.post(f"/pago/resolver/{tx_id}", json={"estado": "RECHAZADO", "resuelto_por": "test"}, headers=AUTH)
+    # Si después el POS confirma que la abandonada se cobró, queda la alerta de doble cobro.
+    r = client.post(f"/pago/resolver/{tx_id}", json={"estado": "APROBADO", "resuelto_por": "test"}, headers=AUTH)
     assert r.status_code == 200
-    assert client.post("/pago", json=VENTA, headers=AUTH).get_json()["estado"] == "APROBADO"
+    tx = tx_store.obtener(tx_id)
+    assert tx["estado"] == "APROBADO" and "dos veces" in tx["nota"]
 
 
 def test_resultado_tardio_reconcilia_y_desbloquea(client, fake_pos):
@@ -131,12 +136,14 @@ def test_pago_iniciar_registra_y_consulta_estado(client, fake_pos):
     assert tx_store.obtener(tx_id)["estado"] == "APROBADO"
 
 
-def test_pago_iniciar_bloqueado_por_pendiente(client):
+def test_pago_iniciar_abandona_la_pendiente_anterior(client):
+    """Una PENDIENTE que quedó en la base (ej. reinicio del servicio) no bloquea:
+    se marca ABANDONADA y la venta nueva sigue."""
     tx_store.registrar_intento("tx-viejo", "transbank", "1", "POS_TEST", "1", "CAJA_TEST", 1000)
     r = client.post("/pago/iniciar", json={"type": "transbank", "id_sucursal": "1",
                                            "nombre_caja": "CAJA_TEST", "amount": 900}, headers=AUTH)
-    assert r.status_code == 409
-    assert r.get_json()["pending_transaction_id"] == "tx-viejo"
+    assert r.status_code != 409
+    assert tx_store.obtener("tx-viejo")["estado"] == "ABANDONADA"
 
 
 def test_validaciones(client):
@@ -407,8 +414,9 @@ def test_cancelar_mientras_espera_el_cable(espera_rapida, fake_pos):
     assert r.status_code == 200 and r.get_json()["estado"] == "INDETERMINADA"
     t.join(3)
     assert out["r"].get_json()["estado"] == "INDETERMINADA"
-    # La caja sigue bloqueada: el cliente pudo haber pagado
-    assert server.app.test_client().post("/pago", json=VENTA, headers=AUTH).status_code == 409
+    # La venta nueva pasa y la anterior queda ABANDONADA (se sigue reconciliando)
+    assert server.app.test_client().post("/pago", json=VENTA, headers=AUTH).status_code == 200
+    assert tx_store.obtener(tx_id)["estado"] == "ABANDONADA"
 
 
 def test_reconciliar_transbank_desde_el_panel(client, fake_pos):
@@ -428,7 +436,6 @@ def test_resultado_tardio_sin_confirmacion_no_resuelve(client, fake_pos, server)
     server.aplicar_resultado_tardio(tx_id, {"status": "indeterminada", "message": "se cortó el cable"})
     tx = tx_store.obtener(tx_id)
     assert tx["estado"] == "INDETERMINADA" and tx["resuelto_por"] is None
-    assert client.post("/pago", json=VENTA, headers=AUTH).status_code == 409
 
 
 # ── Detección de puerto compartida con Getnet ─────────────────

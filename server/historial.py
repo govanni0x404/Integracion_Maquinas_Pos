@@ -14,7 +14,7 @@ from core import transaction_store as tx_store
 
 NOMBRE_MAQUINA = {"transbank": "Transbank", "getnet": "Getnet", "mercadopago": "Mercado Pago", "tuu": "TUU"}
 TIPO_DESDE_REQUEST = {"haulmer": "tuu"}  # en /pago la caja manda "haulmer"; adentro se llama tuu
-ESTADOS = ("APROBADO", "RECHAZADO", "ERROR", "PENDIENTE", "INDETERMINADA")
+ESTADOS = ("APROBADO", "RECHAZADO", "ERROR", "PENDIENTE", "INDETERMINADA", "ABANDONADA")
 LIMITE_MAXIMO = 1000
 
 # Claves (en minúsculas) que se buscan dentro de la respuesta del POS.
@@ -116,7 +116,7 @@ def consultar(args):
     args: los parámetros de la URL (request.args). Todos son opcionales:
       desde, hasta   AAAA-MM-DD (ambos días incluidos; sin ninguno = hoy)
       tipo           transbank | getnet | mercadopago | tuu (o haulmer)
-      estado         APROBADO | RECHAZADO | ERROR | PENDIENTE | INDETERMINADA
+      estado         APROBADO | RECHAZADO | ERROR | PENDIENTE | INDETERMINADA | ABANDONADA
       id_sucursal, nombre_caja
       limite (máx. 1000, por defecto 200), offset (para paginar)
     Devuelve el dict de la respuesta. Lanza ValueError si un parámetro está mal.

@@ -156,6 +156,10 @@ _find_and_load_dotenv()
 
 APP_NAME = os.environ.get("APP_NAME", " ApiPagoElectronico")
 
+# Versión de la aplicación (se muestra en la esquina inferior del panel). Subirla en cada
+# entrega y mantenerla igual a MyAppVersion de instaladorInno_windows.iss.
+APP_VERSION = "1.1.0"
+
 
 
 # ── Log diagnóstico de credenciales (se escribe apenas el logger esté listo) ──

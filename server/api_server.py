@@ -12,6 +12,7 @@ from flask_cors import CORS
 
 from config.settings import (
     APP_NAME,
+    APP_VERSION,
     ID_SUCURSAL,
     NOMBRE_CAJA,
     ID_TERMINAL,
@@ -62,6 +63,16 @@ RUTAS_COBRO_GET = {"/pago", "/pago/iniciar", "/pago/detalle"}
 # Cuánto espera /pago/cancelar a que el POS Getnet responda al Command 116
 # antes de dejar la venta INDETERMINADA (el cliente pudo haber ingresado el PIN).
 ESPERA_CANCELACION_GETNET = 20
+
+# Cuánto espera una venta nueva a que la anterior (ya cancelada) suelte la caja.
+ESPERA_LIBERAR_CAJA = ESPERA_CANCELACION_GETNET + 10
+
+# Una venta nueva reemplaza a la anterior de la misma caja solo si la anterior tiene
+# al menos estos segundos: así un doble clic no cancela la venta recién enviada.
+GRACIA_REEMPLAZO_VENTA = 5
+
+NOTA_ABANDONADA = ("Abandonada: llegó una venta nueva a la misma caja y esta se dejó de esperar. "
+                   "Se sigue reconciliando sola en segundo plano; si sale APROBADA queda una alerta para revisar.")
 
 # Medio de pago -> cómo se reconcilia una venta INDETERMINADA (monitor y panel).
 RESUELTO_POR_MONITOR = {"getnet": "Command 101", "transbank": "Última venta 0250",
@@ -937,7 +948,7 @@ class APIServer:
                         esperando = set(self._esperando_getnet)
                     pendientes = [
                         tx for tx in tx_store.listar_no_resueltas()
-                        if tx.get("estado") == "INDETERMINADA" and tx["tx_id"] not in esperando
+                        if tx.get("estado") in ("INDETERMINADA", "ABANDONADA") and tx["tx_id"] not in esperando
                     ]
                     for tx in pendientes:
                         if tx.get("tipo") == "getnet" and not self.getnet:
@@ -1149,7 +1160,7 @@ class APIServer:
                 USAR_POS_FISICO, USAR_GETNET, MAX_TRANSACTION_TIME, TIMEOUT_SERVER
             )
             if not session.get("panel_ok"):
-                return render_template_string(LOGIN_HTML, app_name=APP_NAME, nombre_caja=NOMBRE_CAJA,
+                return render_template_string(LOGIN_HTML, app_name=APP_NAME, app_version=APP_VERSION, nombre_caja=NOMBRE_CAJA,
                                               id_sucursal=_id_sucursal_del_env())
 
             # Buscar .env — en --onefile el .env está junto al .exe
@@ -1205,6 +1216,7 @@ class APIServer:
 
             return render_template_string(PANEL_HTML, **{
                 "app_name":      APP_NAME,
+                "app_version":   APP_VERSION,
                 "http_port":     HTTP_PORT,
                 "id_sucursal":   ID_SUCURSAL,
                 "nombre_caja":   NOMBRE_CAJA,
@@ -1879,6 +1891,10 @@ class APIServer:
                 # el cliente pudo haber pagado ya en el POS y no queremos cobrarle
                 # dos veces. Esta verificación es persistente (sobrevive un reinicio
                 # del servicio), a diferencia de busy_boxes que es solo en memoria.
+                # Antes, si la venta anterior ya pasó su timeout, se cancela y se libera.
+                bloqueo = self.reemplazar_venta_anterior(runner_id_sucursal, runner_nombre_caja, getnet_log)
+                if bloqueo:
+                    return bloqueo
                 pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, runner_nombre_caja)
                 if pendiente:
                     logger.warning("Venta Getnet bloqueada: transacción previa sin resolver tx=%s", pendiente)
@@ -2049,7 +2065,11 @@ class APIServer:
                 runner_id_sucursal = str(ID_SUCURSAL)
                 runner_nombre_caja = str(NOMBRE_CAJA)
 
-                # Igual que Getnet: una venta previa sin confirmar bloquea la caja.
+                # Igual que Getnet: una venta previa sin confirmar bloquea la caja
+                # (salvo que ya haya pasado su timeout: entonces se libera).
+                bloqueo = self.reemplazar_venta_anterior(runner_id_sucursal, runner_nombre_caja, transbank_log)
+                if bloqueo:
+                    return bloqueo
                 pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, runner_nombre_caja)
                 if pendiente:
                     logger.warning("Venta Transbank bloqueada: transacción previa sin resolver tx=%s", pendiente)
@@ -2208,6 +2228,9 @@ class APIServer:
                 # bloquea nuevas ventas en ESE terminal (no en las cajas Getnet/Transbank).
                 runner_id_sucursal = str(ID_SUCURSAL)
                 caja_mp = _mayus(f"mp:{terminal_id}")
+                bloqueo = self.reemplazar_venta_anterior(runner_id_sucursal, caja_mp, mercadopago_log)
+                if bloqueo:
+                    return bloqueo
                 pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, caja_mp)
                 if pendiente:
                     logger.warning("Venta MP bloqueada: transacción previa sin resolver tx=%s", pendiente)
@@ -2471,7 +2494,9 @@ class APIServer:
 
             if not id_sucursal or not nombre_caja or not pos_type:
                 return jsonify({"error": "id_sucursal, nombre_caja y type requeridos"}), 400
-
+            bloqueo = self.reemplazar_venta_anterior(id_sucursal, nombre_caja, transbank_log)
+            if bloqueo:
+                return bloqueo
             pendiente = tx_store.hay_pendiente_sin_resolver(id_sucursal, nombre_caja)
             if pendiente:
                 logger.warning("Pago iniciar bloqueado: transacción previa sin resolver tx=%s", pendiente)
@@ -2621,105 +2646,7 @@ class APIServer:
         @app.route("/pago/cancelar/<tx_id>", methods=["POST"])
         @require_basic_auth
         def http_pago_cancelar(tx_id):
-            with self.tasks_lock:
-                task = self.tasks.get(tx_id)
-                if not task:
-                    return jsonify({"error": "Transacción no encontrada"}), 404
-                if task.get("result") is not None:
-                    return jsonify({"error": "La transacción ya finalizó", "estado": task.get("estado")}), 400
-                tipo = task.get("type")
-
-            if tipo == "mercadopago":
-                # La orden sigue abierta en el terminal: /pago la cancela en MP y
-                # responde el resultado real (CANCELADO -> RECHAZADO, o INDETERMINADA
-                # si el cliente ya estaba pagando).
-                task["cancel"].set()
-                mercadopago_log.info(f"✋ El cliente pidió cancelar la venta (tx {tx_id}, {task.get('nombre_caja')}).")
-                return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "CANCELANDO",
-                                "message": "Se pidió cancelar la orden en Mercado Pago. El resultado final llega "
-                                           f"en la respuesta de /pago o en /pago/estado/{tx_id}."}), 202
-
-            if tipo == "tuu":
-                # TUU no permite retirar la solicitud por API: solo se deja de esperar.
-                # /pago responde INDETERMINADA; si el cobro se cancela en la máquina, el
-                # GET pasa a "Canceled" y el monitor la resuelve sola.
-                task["cancel"].set()
-                tuu_log.info(f"✋ El cliente dejó de esperar la venta (tx {tx_id}, {task.get('nombre_caja')}); "
-                             "la solicitud sigue viva en TUU.")
-                return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "INDETERMINADA",
-                                "message": "TUU no permite cancelar por API: cancele el cobro en la máquina (Modo "
-                                           "Integración). La venta queda sin confirmar y se reconcilia sola; "
-                                           "no reintente el cobro."}), 202
-
-            # Todavía en la cola (Transbank o Getnet): nunca llegó al POS, así que
-            # se cancela de verdad y el worker no la envía.
-            with self.tasks_lock:
-                en_cola = task.get("estado") == "PENDIENTE" and task.get("result") is None
-                if en_cola:
-                    self._canceladas_en_cola.add(tx_id)
-                    task["estado"] = "CANCELADO"
-                    task["result"] = {"status": "cancelled", "message": "Cancelada antes de enviarse al POS"}
-                    if task.get("cancel"):
-                        task["cancel"].set()
-                    task["event"].set()
-            if en_cola:
-                return self._cancelada_antes_de_enviar(tx_id, task)
-
-            if tipo == "getnet" and self.getnet:
-                if self.getnet.solicitar_cancelacion():
-                    # La venta está esperando en el POS: se le pide cancelarla (Command 116)
-                    # y se espera a que el worker informe el resultado.
-                    if task["event"].wait(timeout=ESPERA_CANCELACION_GETNET):
-                        estado = task.get("estado")
-                        logger.info("Venta Getnet %s terminó tras pedir cancelación: %s", tx_id, estado)
-                        return jsonify({"status": "ok", "transaction_id": tx_id, "estado": estado,
-                                        "result": task.get("result")}), 200
-                elif task.get("estado") == "PROCESANDO":
-                    # El worker la tomó pero todavía se está conectando al puerto: el
-                    # módulo Getnet revisa esta señal justo antes de enviar la venta (y
-                    # si ya la envió, manda el Command 116).
-                    task["cancel"].set()
-                    if task["event"].wait(timeout=ESPERA_CANCELACION_GETNET):
-                        estado = task.get("estado")
-                        logger.info("Venta Getnet %s terminó tras pedir cancelación: %s", tx_id, estado)
-                        return jsonify({"status": "ok", "transaction_id": tx_id, "estado": estado,
-                                        "result": task.get("result")}), 200
-
-            with self.tasks_lock:
-                if task.get("result") is not None:
-                    return jsonify({"status": "ok", "transaction_id": tx_id, "estado": task.get("estado"),
-                                    "result": task.get("result")}), 200
-
-                if tipo == "getnet" or (tipo == "transbank" and task.get("estado") == "ESPERANDO_POS"):
-                    # La venta ya pudo llegar al POS: cancelar solo corta la espera de
-                    # la petición. La transacción sigue INDETERMINADA (caja bloqueada) y
-                    # el monitor la sigue reconciliando en background.
-                    task["cancel"].set()
-                    task["result"] = {
-                        "status": "indeterminada",
-                        "message": "Se dejó de esperar por pedido del cliente. La venta sigue sin confirmar: "
-                                   f"se reconcilia sola cuando el POS vuelva; consulte /pago/estado/{tx_id}.",
-                    }
-                    task["estado"] = "INDETERMINADA"
-                    task["event"].set()
-                    logger.info("Espera %s cancelada por el cliente: %s", tipo, tx_id)
-                    (getnet_log if tipo == "getnet" else transbank_log).info(
-                        f"✋ El cliente dejó de esperar la venta (tx {tx_id}); sigue INDETERMINADA.")
-                    return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "INDETERMINADA",
-                                    "message": task["result"]["message"]}), 200
-
-            # Transbank con la venta ya en el POS: el SDK no tiene comando para
-            # cancelarla. Responder "CANCELADO" y liberar la caja dejaba al cliente
-            # pagando mientras el sistema decía que no hubo venta (doble cobro).
-            transbank_log.info(
-                f"✋ Se pidió cancelar la venta (tx {tx_id}) pero ya está en el POS Transbank: no se puede cancelar "
-                "desde el sistema. Debe cancelarse en la máquina; el resultado llega igual."
-            )
-            return jsonify({
-                "status": "in_progress", "transaction_id": tx_id, "estado": task.get("estado"),
-                "message": "La venta ya se envió al POS Transbank y no se puede cancelar desde el sistema. "
-                           f"Cancélela en la máquina; el resultado llega en /pago o en /pago/estado/{tx_id}.",
-            }), 409
+            return self.cancelar_venta(tx_id)
 
         @app.route("/pago/limpiar", methods=["POST"])
         @require_basic_auth
@@ -2732,6 +2659,207 @@ class APIServer:
                     self.tasks.pop(tx_id, None)
             logger.info("Limpiadas %d transacciones antiguas", len(old_txs))
             return jsonify({"status": "ok", "eliminadas": len(old_txs)}), 200
+
+    def reemplazar_venta_anterior(self, id_sucursal, nombre_caja, _log):
+        """
+        Llega una venta nueva a una caja que tiene otra sin terminar: la nueva
+        REEMPLAZA a la anterior (la anterior se sigue consultando en segundo plano).
+        - La anterior se cancela en la máquina cuando se puede (Getnet con el
+          Command 116, la orden de Mercado Pago) o se deja de esperar (Transbank
+          esperando el cable) y se espera a que suelte la caja.
+        - No se toca si es muy reciente (GRACIA_REEMPLAZO_VENTA, por un doble clic)
+          ni una de TUU dentro de su timeout: TUU no se puede cancelar por API y la
+          solicitud sigue en la máquina, así que mandar otra podría cobrar dos veces.
+        - Transbank con la venta en la pantalla del POS tampoco se puede cancelar
+          por sistema: se espera un rato por si la cancelan en la máquina.
+        - Las ventas sin confirmar de Getnet/Transbank pasan a ABANDONADA: ya no
+          bloquean, pero el monitor las sigue reconciliando y si alguna sale APROBADA
+          queda una alerta para revisar un posible doble cobro.
+        - Las de TUU y Mercado Pago se consultan en el momento: si ya terminaron (o las
+          cancelaron en la máquina) la caja queda libre; si siguen vivas, bloquean.
+        Devuelve None si la caja quedó libre, o la respuesta HTTP (429) para la
+        venta nueva cuando la anterior no se pudo reemplazar.
+        """
+        id_sucursal, caja = str(id_sucursal), _mayus(nombre_caja)
+        ahora = time.time()
+        with self.tasks_lock:
+            en_curso = [(tx_id, t) for tx_id, t in self.tasks.items()
+                        if t.get("result") is None and str(t.get("id_sucursal")) == id_sucursal
+                        and _mayus(t.get("nombre_caja")) == caja]
+
+        def ocupada(tx_id, mensaje):
+            _log.info(f"🔁 Venta nueva rechazada en {caja}: {mensaje} (venta anterior tx {tx_id}).")
+            return jsonify({"status": "busy", "message": mensaje, "pending_transaction_id": tx_id}), 429
+
+        for tx_id, t in en_curso:
+            edad = ahora - t.get("timestamp", ahora)
+            if edad < GRACIA_REEMPLAZO_VENTA:
+                return ocupada(tx_id, "Se acaba de enviar otra venta a esta máquina: espere su resultado")
+            if t.get("type") == "tuu" and edad < (t.get("timeout") or TIMEOUT_SERVER):
+                return ocupada(tx_id, "La máquina TUU tiene un cobro en curso que no se puede cancelar por "
+                                      "sistema: cancélelo en la máquina (Modo Integración) y vuelva a enviar la venta")
+
+        for tx_id, t in en_curso:
+            _log.info(
+                f"⏭️ Llegó una venta nueva a la caja {caja} y la anterior (tx {tx_id}, hace "
+                f"{int(ahora - t.get('timestamp', ahora))} s) seguía sin terminar: se cancela y se sigue "
+                "consultando en segundo plano."
+            )
+            logger.info("Venta anterior tx=%s: se cancela porque llegó otra a %s/%s", tx_id, id_sucursal, caja)
+            try:
+                self.cancelar_venta(tx_id)
+            except Exception as e:
+                logger.error("No se pudo cancelar la venta anterior tx=%s: %s", tx_id, e)
+
+        if en_curso:
+            # El /pago de la venta anterior suelta la caja apenas ve el resultado.
+            limite = time.time() + ESPERA_LIBERAR_CAJA
+            while time.time() < limite:
+                with self.busy_lock:
+                    sigue = any(str(k[0]) == id_sucursal and _mayus(k[1]) == caja for k in self.busy_boxes)
+                if not sigue:
+                    break
+                time.sleep(0.2)
+
+        with self.tasks_lock:
+            vivas = {tx_id for tx_id, t in self.tasks.items() if t.get("result") is None}
+        for tx_id, _ in en_curso:
+            if tx_id in vivas:
+                # Ej. Transbank con la venta en la pantalla del POS: el SDK no la puede cancelar.
+                return ocupada(tx_id, "La máquina sigue con la venta anterior en pantalla y no se pudo cancelar "
+                                      "desde el sistema: cancélela en la máquina y vuelva a enviar la venta")
+        for _ in range(100):
+            pendiente = tx_store.hay_pendiente_sin_resolver(id_sucursal, caja)
+            if not pendiente or pendiente in vivas:
+                break
+            tx = tx_store.obtener(pendiente) or {}
+            tipo = tx.get("tipo")
+            if tipo in ("tuu", "mercadopago"):
+                # La solicitud/orden puede seguir viva en la máquina: abandonarla y crear
+                # otra podría cobrar dos veces. Se consulta su estado ahora mismo (si la
+                # cancelaron en la máquina, se libera sin esperar al monitor).
+                recon = self.reconciliar(tx)
+                nuevo = self.aplicar_reconciliacion(
+                    tx, recon, resuelto_por=f"consulta al llegar una venta nueva ({RESUELTO_POR_MONITOR[tipo]})")
+                if nuevo != "INDETERMINADA":
+                    _log.info(f"✅ La venta anterior (tx {pendiente}) se consultó y quedó {nuevo}: la caja {caja} queda libre.")
+                    continue
+                if tipo == "tuu":
+                    return ocupada(pendiente, "La venta TUU anterior sigue pendiente en la máquina y no se puede "
+                                              "cancelar por sistema: cancélela en la máquina (Modo Integración) "
+                                              "y vuelva a enviar la venta")
+                return ocupada(pendiente, "El cliente todavía puede pagar la orden anterior en el terminal Mercado "
+                                          "Pago: cancélela en el terminal (o espere a que termine) y vuelva a enviar")
+            tx_store.actualizar_estado(pendiente, "ABANDONADA", nota=NOTA_ABANDONADA)
+            logger.warning("tx=%s pasa a ABANDONADA para liberar %s/%s", pendiente, id_sucursal, caja)
+            _log.info(
+                f"🗃️ La venta anterior (tx {pendiente}) quedó sin confirmar y se marca ABANDONADA para poder "
+                f"vender de nuevo en {caja}. Se sigue revisando sola; si sale APROBADA aparece una alerta en el panel."
+            )
+        return None
+
+    def cancelar_venta(self, tx_id):
+        """Cancela (o deja de esperar) una venta en curso. Lo usa /pago/cancelar y
+        también una venta nueva que llega a la caja y reemplaza a la anterior."""
+        with self.tasks_lock:
+            task = self.tasks.get(tx_id)
+            if not task:
+                return jsonify({"error": "Transacción no encontrada"}), 404
+            if task.get("result") is not None:
+                return jsonify({"error": "La transacción ya finalizó", "estado": task.get("estado")}), 400
+            tipo = task.get("type")
+
+        if tipo == "mercadopago":
+            # La orden sigue abierta en el terminal: /pago la cancela en MP y
+            # responde el resultado real (CANCELADO -> RECHAZADO, o INDETERMINADA
+            # si el cliente ya estaba pagando).
+            task["cancel"].set()
+            mercadopago_log.info(f"✋ El cliente pidió cancelar la venta (tx {tx_id}, {task.get('nombre_caja')}).")
+            return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "CANCELANDO",
+                            "message": "Se pidió cancelar la orden en Mercado Pago. El resultado final llega "
+                                       f"en la respuesta de /pago o en /pago/estado/{tx_id}."}), 202
+
+        if tipo == "tuu":
+            # TUU no permite retirar la solicitud por API: solo se deja de esperar.
+            # /pago responde INDETERMINADA; si el cobro se cancela en la máquina, el
+            # GET pasa a "Canceled" y el monitor la resuelve sola.
+            task["cancel"].set()
+            tuu_log.info(f"✋ El cliente dejó de esperar la venta (tx {tx_id}, {task.get('nombre_caja')}); "
+                         "la solicitud sigue viva en TUU.")
+            return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "INDETERMINADA",
+                            "message": "TUU no permite cancelar por API: cancele el cobro en la máquina (Modo "
+                                       "Integración). La venta queda sin confirmar y se reconcilia sola; "
+                                       "no reintente el cobro."}), 202
+
+        # Todavía en la cola (Transbank o Getnet): nunca llegó al POS, así que
+        # se cancela de verdad y el worker no la envía.
+        with self.tasks_lock:
+            en_cola = task.get("estado") == "PENDIENTE" and task.get("result") is None
+            if en_cola:
+                self._canceladas_en_cola.add(tx_id)
+                task["estado"] = "CANCELADO"
+                task["result"] = {"status": "cancelled", "message": "Cancelada antes de enviarse al POS"}
+                if task.get("cancel"):
+                    task["cancel"].set()
+                task["event"].set()
+        if en_cola:
+            return self._cancelada_antes_de_enviar(tx_id, task)
+
+        if tipo == "getnet" and self.getnet:
+            if self.getnet.solicitar_cancelacion():
+                # La venta está esperando en el POS: se le pide cancelarla (Command 116)
+                # y se espera a que el worker informe el resultado.
+                if task["event"].wait(timeout=ESPERA_CANCELACION_GETNET):
+                    estado = task.get("estado")
+                    logger.info("Venta Getnet %s terminó tras pedir cancelación: %s", tx_id, estado)
+                    return jsonify({"status": "ok", "transaction_id": tx_id, "estado": estado,
+                                    "result": task.get("result")}), 200
+            elif task.get("estado") == "PROCESANDO":
+                # El worker la tomó pero todavía se está conectando al puerto: el
+                # módulo Getnet revisa esta señal justo antes de enviar la venta (y
+                # si ya la envió, manda el Command 116).
+                task["cancel"].set()
+                if task["event"].wait(timeout=ESPERA_CANCELACION_GETNET):
+                    estado = task.get("estado")
+                    logger.info("Venta Getnet %s terminó tras pedir cancelación: %s", tx_id, estado)
+                    return jsonify({"status": "ok", "transaction_id": tx_id, "estado": estado,
+                                    "result": task.get("result")}), 200
+
+        with self.tasks_lock:
+            if task.get("result") is not None:
+                return jsonify({"status": "ok", "transaction_id": tx_id, "estado": task.get("estado"),
+                                "result": task.get("result")}), 200
+
+            if tipo == "getnet" or (tipo == "transbank" and task.get("estado") == "ESPERANDO_POS"):
+                # La venta ya pudo llegar al POS: cancelar solo corta la espera de
+                # la petición. La transacción sigue INDETERMINADA (caja bloqueada) y
+                # el monitor la sigue reconciliando en background.
+                task["cancel"].set()
+                task["result"] = {
+                    "status": "indeterminada",
+                    "message": "Se dejó de esperar por pedido del cliente. La venta sigue sin confirmar: "
+                               f"se reconcilia sola cuando el POS vuelva; consulte /pago/estado/{tx_id}.",
+                }
+                task["estado"] = "INDETERMINADA"
+                task["event"].set()
+                logger.info("Espera %s cancelada por el cliente: %s", tipo, tx_id)
+                (getnet_log if tipo == "getnet" else transbank_log).info(
+                    f"✋ El cliente dejó de esperar la venta (tx {tx_id}); sigue INDETERMINADA.")
+                return jsonify({"status": "ok", "transaction_id": tx_id, "estado": "INDETERMINADA",
+                                "message": task["result"]["message"]}), 200
+
+        # Transbank con la venta ya en el POS: el SDK no tiene comando para
+        # cancelarla. Responder "CANCELADO" y liberar la caja dejaba al cliente
+        # pagando mientras el sistema decía que no hubo venta (doble cobro).
+        transbank_log.info(
+            f"✋ Se pidió cancelar la venta (tx {tx_id}) pero ya está en el POS Transbank: no se puede cancelar "
+            "desde el sistema. Debe cancelarse en la máquina; el resultado llega igual."
+        )
+        return jsonify({
+            "status": "in_progress", "transaction_id": tx_id, "estado": task.get("estado"),
+            "message": "La venta ya se envió al POS Transbank y no se puede cancelar desde el sistema. "
+                       f"Cancélela en la máquina; el resultado llega en /pago o en /pago/estado/{tx_id}.",
+        }), 409
 
     def _cancelada_antes_de_enviar(self, tx_id, task):
         """Cierra una venta cancelada mientras esperaba en la cola: el POS nunca la
@@ -3048,6 +3176,9 @@ class APIServer:
         # clave: ambas podrían llegar a la máquina y cobrar dos veces.
         runner_id_sucursal = str(ID_SUCURSAL)
         caja_tuu = _mayus(f"tuu:{device}")
+        bloqueo = self.reemplazar_venta_anterior(runner_id_sucursal, caja_tuu, tuu_log)
+        if bloqueo:
+            return bloqueo
         pendiente = tx_store.hay_pendiente_sin_resolver(runner_id_sucursal, caja_tuu)
         if pendiente:
             logger.warning("Venta TUU bloqueada: transacción previa sin resolver tx=%s", pendiente)

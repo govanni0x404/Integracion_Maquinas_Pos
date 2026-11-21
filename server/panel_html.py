@@ -586,6 +586,7 @@ PANEL_HTML = """<!DOCTYPE html>
               <option value="ERROR">Error</option>
               <option value="PENDIENTE">Pendiente</option>
               <option value="INDETERMINADA">Indeterminada</option>
+              <option value="ABANDONADA">Abandonada</option>
             </select>
           </label>
           <button class="btn btn-primary btn-sm" onclick="loadHistorial(false)">Buscar</button>
@@ -979,7 +980,7 @@ async function loadPendientes() {
           <span class="brand-dot ${DOT_TIPO[tx.tipo] || ''}"></span>
           <span class="tx-title">${esc(NOMBRE_TIPO[tx.tipo] || tx.tipo)}</span>
           <span class="tx-amount">${esc(fmtMonto(tx.monto))}</span>
-          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : 'badge-blue'}">${esc(tx.estado)}</span>
+          <span class="badge ${tx.estado === 'INDETERMINADA' ? 'badge-yellow' : tx.estado === 'ABANDONADA' ? 'badge-red' : 'badge-blue'}">${esc(tx.estado)}</span>
         </div>
         <div class="tx-meta">
           <span>Transacción <b>${esc(tx.tx_id)}</b></span>
@@ -1123,7 +1124,7 @@ let hvVentas = [];
 let hvOffset = 0;
 const HV_LIMITE = 200;
 const HV_BADGE = { APROBADO: 'badge-green', RECHAZADO: 'badge-red', ERROR: 'badge-red',
-                   PENDIENTE: 'badge-blue', INDETERMINADA: 'badge-yellow' };
+                   PENDIENTE: 'badge-blue', INDETERMINADA: 'badge-yellow', ABANDONADA: 'badge-red' };
 
 function hvHoy() {
   const d = new Date();
@@ -1403,6 +1404,7 @@ async function detectGetnetPort() {
   }
 }
 </script>
+<div style="position:fixed;right:12px;bottom:8px;font-size:11px;opacity:.6;pointer-events:none;z-index:9999;">v{{ app_version }}</div>
 </body>
 </html>
 """
@@ -1760,6 +1762,7 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
   btn.disabled = false; txt.textContent = 'Ingresar';
 });
 </script>
+<div style="position:fixed;right:12px;bottom:8px;font-size:11px;opacity:.6;pointer-events:none;z-index:9999;">v{{ app_version }}</div>
 </body>
 </html>
 """

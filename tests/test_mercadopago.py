@@ -198,9 +198,10 @@ def test_timeout_con_pago_en_curso_queda_indeterminada_y_se_reconcilia(client, m
     assert tx["nombre_caja"] == "MP:NEWLAND_N950__TEST"
     assert client.get("/pago/estado/venta-ind", headers=AUTH).get_json()["estado"] == "INDETERMINADA"
 
-    # El terminal queda bloqueado: el cliente todavía puede pagar esa orden
+    # Al llegar otra venta se consulta la orden: sigue abierta (el cliente todavía
+    # puede pagarla), así que el terminal queda bloqueado
     r = client.post("/pago", json=PAGO, headers=AUTH)
-    assert r.status_code == 409
+    assert r.status_code == 429
     assert r.get_json()["pending_transaction_id"] == "venta-ind"
 
     # Mientras la orden siga abierta, reconciliar no la resuelve

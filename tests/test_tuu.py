@@ -177,10 +177,25 @@ def test_timeout_queda_indeterminada_y_bloquea_la_maquina(client, monkeypatch, r
     assert body["message"].startswith(tuu.MENSAJE_INDETERMINADA)
     assert tx_store.obtener("venta-to")["estado"] == "INDETERMINADA"
 
+    # Al llegar otra venta se consulta la anterior: sigue pendiente en la máquina, así que bloquea
     r = client.post("/pago", json={**PAGO, "tx_id": "venta-2"}, headers=AUTH)
-    assert r.status_code == 409
+    assert r.status_code == 429
     assert r.get_json()["pending_transaction_id"] == "venta-to"
+    assert "cancélela en la máquina" in r.get_json()["message"]
     assert len(fake.posts()) == 1  # nunca se crea una segunda solicitud en la máquina
+    assert tx_store.obtener("venta-to")["estado"] == "INDETERMINADA"
+
+
+def test_venta_nueva_libera_si_la_anterior_se_cancelo_en_la_maquina(client, monkeypatch, reloj_rapido):
+    fake = _tuu(monkeypatch, FakeTUU([PENDING]))
+    client.post("/pago", json={**PAGO, "tx_id": "venta-c"}, headers=AUTH)
+    assert tx_store.obtener("venta-c")["estado"] == "INDETERMINADA"
+
+    # La cajera la canceló en la máquina: la venta nueva lo ve al tiro, sin esperar al monitor
+    fake.estados = [respuesta("Canceled"), COMPLETED]
+    r = client.post("/pago", json={**PAGO, "tx_id": "venta-d"}, headers=AUTH)
+    assert r.status_code == 200
+    assert tx_store.obtener("venta-c")["estado"] == "RECHAZADO"
 
 
 def test_monitor_resuelve_indeterminada_cuando_pasa_a_completed(server, monkeypatch, reloj_rapido):
@@ -259,7 +274,7 @@ def test_creacion_sin_saber_si_llego_queda_indeterminada(client, monkeypatch, re
     _tuu(monkeypatch, FakeTUU([("HTTP", 503)], post=[TimeoutError("timed out")]))
     body = client.post("/pago", json={**PAGO, "tx_id": "venta-x"}, headers=AUTH).get_json()
     assert body["estado"] == "INDETERMINADA"
-    assert client.post("/pago", json=PAGO, headers=AUTH).status_code == 409
+    assert client.post("/pago", json=PAGO, headers=AUTH).status_code == 429
 
 
 def test_mr191_al_crear_significa_que_ya_existe(client, monkeypatch, reloj_rapido):

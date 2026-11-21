@@ -3,6 +3,7 @@ Getnet: una venta que ya se envió al POS nunca debe quedar con un estado final
 (ERROR/RECHAZADO) si no hay confirmación real de la máquina. Tiene que quedar
 INDETERMINADA para poder validarla después (Command 101 / panel).
 """
+import logging
 import time
 
 import pytest
@@ -417,10 +418,49 @@ def test_cancelar_la_espera_deja_la_venta_indeterminada(getnet_server):
     assert "/pago/estado/" in body["message"]
     assert tx_store.obtener("venta-3")["estado"] == "INDETERMINADA"
 
-    # La caja sigue bloqueada: el cliente pudo haber pagado
-    r = srv.app.test_client().post("/pago", json=VENTA, headers=AUTH)
-    assert r.status_code == 409
-    assert r.get_json()["pending_transaction_id"] == "venta-3"
+    # Una venta nueva ya no queda bloqueada: la anterior pasa a ABANDONADA y se
+    # sigue reconciliando en segundo plano (el monitor también revisa las abandonadas).
+    srv.reemplazar_venta_anterior("1", "CAJA_TEST", logging.getLogger("test"))
+    assert tx_store.obtener("venta-3")["estado"] == "ABANDONADA"
+    assert tx_store.hay_pendiente_sin_resolver("1", "CAJA_TEST") is None
+    assert "venta-3" in [t["tx_id"] for t in tx_store.listar_no_resueltas()]
+    tx_store.actualizar_estado("venta-3", "RECHAZADO")
+
+
+def test_venta_nueva_reemplaza_a_la_que_sigue_esperando(getnet_server, monkeypatch):
+    """El caso de las cajas: la venta anterior quedó pegada esperando al POS y la
+    cajera manda otra. La nueva corta la espera de la anterior (que pasa a
+    ABANDONADA y se sigue revisando en segundo plano) y la caja queda libre."""
+    import server.api_server as api
+    monkeypatch.setattr(api, "GRACIA_REEMPLAZO_VENTA", 0)
+    srv, fake = getnet_server
+    t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-pegada"})
+    assert _esperar(lambda: (srv.tasks.get("venta-pegada") or {}).get("estado") == "ESPERANDO_POS")
+
+    with srv.app.app_context():
+        assert srv.reemplazar_venta_anterior("1", "CAJA_TEST", logging.getLogger("test")) is None
+    t.join(5)
+    assert not t.is_alive()
+    assert out["resp"].get_json()["estado"] == "INDETERMINADA"
+    assert tx_store.obtener("venta-pegada")["estado"] == "ABANDONADA"
+    assert tx_store.hay_pendiente_sin_resolver("1", "CAJA_TEST") is None
+    assert not srv.busy_boxes
+    tx_store.actualizar_estado("venta-pegada", "RECHAZADO")
+
+
+def test_doble_clic_no_cancela_la_venta_recien_enviada(getnet_server):
+    srv, fake = getnet_server
+    t, out = _pago_en_segundo_plano(srv, {**VENTA, "tx_id": "venta-reciente"})
+    assert _esperar(lambda: "venta-reciente" in srv.tasks)
+
+    with srv.app.test_request_context():
+        resp, code = srv.reemplazar_venta_anterior("1", "CAJA_TEST", logging.getLogger("test"))
+    assert code == 429 and resp.get_json()["pending_transaction_id"] == "venta-reciente"
+    assert "venta-reciente" in srv.tasks  # la venta sigue viva
+
+    srv.app.test_client().post("/pago/cancelar/venta-reciente", headers=AUTH)
+    t.join(5)
+    tx_store.actualizar_estado("venta-reciente", "RECHAZADO")
 
 
 def test_resolver_desde_el_panel_libera_la_peticion(getnet_server):
@@ -458,7 +498,6 @@ def test_limite_de_espera_responde_indeterminada(getnet_server):
     # Sigue sin confirmar y bloqueando la caja; el monitor la puede retomar
     assert tx_store.obtener("venta-5")["estado"] == "INDETERMINADA"
     assert "venta-5" not in srv._esperando_getnet
-    assert srv.app.test_client().post("/pago", json=VENTA, headers=AUTH).status_code == 409
 
 
 def test_limite_cero_es_sin_limite(getnet_server):
